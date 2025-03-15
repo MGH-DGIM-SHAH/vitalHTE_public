@@ -1,0 +1,298 @@
+---
+title: "Results section"
+output:
+  word_document: default
+  html_document: default
+date: ''
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+options(scipen = 100)
+library("tidyverse")
+rm(list=ls())
+load("~/real lasso v13-1 2024-04-30 no ICD.RData")
+
+temp2 <- mutate(temp2, quart= ntile(cate, 4), 
+                risk_charge = ntile(CHARGE_AF, 4))
+
+VITAL_C <- filter(temp2, group == 'C')
+VITAL_I <- filter(temp2, group == 'I')
+```
+
+**RESULTS**
+
+```{r text ATE, echo=FALSE}
+##updated 2/24
+pt1 = sum(VITAL_C$follow_time) 
+pt2 = sum(VITAL_I$follow_time)
+n1 = sum(VITAL_C$outcome)
+n2 = sum(VITAL_I$outcome)
+var = n1/pt1^2 + n2/pt2^2
+ir1 = n1/pt1
+ir2 = n2/pt2
+UL =  ((ir2-ir1) + 1.96*sqrt(var)) *100
+LL =  ((ir2-ir1) - 1.96*sqrt(var)) *100
+diff = (ir2 - ir1)*100
+
+text.women <- round(sum(temp2$Gender=="Female") / nrow(temp2) *100,0)
+text.age <- round(mean(temp2$age),0)
+```
+
+
+**Average Treatment Effect**
+
+  We present the baseline characteristics of `r nrow(VITAL)` study participants in **Table 1**. Features were well balanced in the two arms of the trial. In `r round(sum(pt1), digits =0)` person-years of follow-up, `r n1` people in the usual care group were diagnosed with atrial fibrillation (`r round(ir1*100, 2)` per 100-person years). In `r round(pt2, digits =0)` person-years of follow-up, `r n2` people in the screening group were diagnosed with atrial fibrillation (`r round(ir2 * 100, 2)` per 100 person-years). These rates were not statistically significantly different (rate difference `r round(diff,2)` per 100 person-years, 95%CI `r round(LL, 2)` to `r round(UL, 2)`).
+
+
+```{r text AUC, include = FALSE}
+#rm(pt1, pt2, n1, n2, var, ir1, ir2, sd, UL, LL, diff)
+
+library(pROC)
+library(plotROC)
+
+## 1.1 control arm 
+temp3 <- temp2 %>%
+  filter(group =="C") %>%
+  mutate(adj_p = pAF_under_c * follow_time)
+
+text.c.roc <- round(as.numeric(auc(roc(temp3$outcome, temp3$adj_p))), 2)
+
+roc.c.threhold <- (roc(temp3$outcome, temp3$adj_p))
+threshold.c<- ci.thresholds(roc.c.threhold, 
+              thresholds = quantile(temp3$adj_p, 0.75), 
+              boot.n = 10000, conf.level = 0.95, stratified = FALSE)
+
+text.c.sp <- round(threshold.c$specificity[,2],2)
+text.c.sn <- round(threshold.c$sensitivity[,2],2)
+text.c.q4p <- as.numeric(round(quantile(temp3$adj_p, 0.75)*100,2))
+
+## 1.2 intervention arm
+temp3 <- temp2 %>%
+  filter(group =="I") %>%
+  mutate(adj_p = pAF_under_i * follow_time)
+
+text.i.roc <- round(as.numeric(auc(roc(temp3$outcome, temp3$adj_p))), 2)
+
+roc.i.threhold <- (roc(temp3$outcome, temp3$adj_p))
+threshold.i<- ci.thresholds(roc.i.threhold, 
+              thresholds = quantile(temp3$adj_p, 0.75), 
+              boot.n = 10000, conf.level = 0.95, stratified = FALSE)
+
+text.i.sp <- round(threshold.i$specificity[,2],2)
+text.i.sn <- round(threshold.i$sensitivity[,2],2)
+text.i.q4p <- as.numeric(round(quantile(temp3$adj_p, 0.75)*100,2))
+
+
+################################
+# CHARGE AF MODEL #
+###############################
+
+temp2 <- temp2 %>% 
+  mutate(decile_charge = ntile(CHARGE_AF_risk, 10))
+
+## 1.1 Control arm
+temp3 <- temp2 %>%
+  filter(group =="C") %>%
+  mutate(adj_p = CHARGE_AF_risk/5 * follow_time)
+
+text.charge.c.roc <- round(as.numeric(auc(roc(temp3$outcome, temp3$adj_p))), 2)
+
+#1.2.2 threshold analysis @ 75th precentile
+roc.c.threhold <- (roc(temp3$outcome, temp3$adj_p))
+threshold.c<- ci.thresholds(roc.c.threhold, 
+              thresholds = quantile(temp3$adj_p, 0.75), 
+              boot.n = 10000, conf.level = 0.95, stratified = FALSE)
+
+text.charge.c.sp <- round(threshold.c$specificity[,2],2)
+text.charge.c.sn <- round(threshold.c$sensitivity[,2],2)
+text.charge.c.q4p <- as.numeric(round(quantile(temp3$adj_p, 0.75)*100,2))
+
+## 1.2 Intervention arm
+temp3 <- temp2 %>%
+  filter(group =="I") %>%
+  mutate(adj_p = CHARGE_AF_risk/5 * follow_time)
+
+text.charge.i.roc <- round(as.numeric(auc(roc(temp3$outcome, temp3$adj_p))), 2)
+
+roc.i.threhold <- (roc(temp3$outcome, temp3$adj_p))
+threshold.i<- ci.thresholds(roc.i.threhold, 
+              thresholds = quantile(temp3$adj_p, 0.75), 
+              boot.n = 10000, conf.level = 0.95, stratified = FALSE)
+
+text.charge.i.sp <- round(threshold.i$specificity[,2],2)
+text.charge.i.sn <- round(threshold.i$sensitivity[,2],2)
+text.charge.i.q4p <- as.numeric(round(quantile(temp3$adj_p, 0.75)*100,2))
+
+
+detach("package:pROC", unload = TRUE)
+
+```
+
+**Model Performance**
+
+ The constituent models used to estimate the effect-based score discriminated well (c-statistic `r text.c.roc` when predicting AF in usual care conditions; `r text.i.roc` when predicting AF in screening conditions) (**Supplemental Figures S2**). In the usual care prediction model, using the 75th percentile as a threshold (diagnosis rate >`r text.c.q4p` per 100 person-years), the model specificity was `r text.c.sp` and the sensitivity was `r text.c.sn` (**Table S1**). In the screening prediction model, using the 75th percentile as a threshold (diagnosis rate >`r text.i.q4p` per 100 person-years), the model specificity was `r text.i.sp` and the sensitivity was `r text.i.sn`. Visually, the model to predict AF diagnosis in the usual care arm was well calibrated and the model to predict AF diagnosis in the screening arm overpredicted AF risk at the low end of the predicted risk range (**Supplemental Figure S3**). 
+  
+  The CHARGE-AF risk model also discriminated well (c-statistic `r text.charge.c.roc` in the usual care arm; `r text.charge.i.roc` in the screening arm) (**Supplemental Figures S4**). Using the CHARGE-AF model, at the 75th percentile as a threshold, the predicted diagnosis rate in the usual care arm was >`r text.charge.c.q4p` per 100 person-years, and >`r text.charge.i.q4p` per 100 person-years in the screening arm. At this threshold, in both arms, the model specificity was `r text.charge.c.sp` and the sensitivity was `r text.charge.c.sn` (**Table S1**). Visually, the CHARGE-AF model substantially over predicted AF risk at the highest risk range of the usual care arm but was well calibrated in the screening arm (**Supplemental Figure S5**). 
+
+
+```{r text CATE, echo=FALSE }
+temp2 <- temp2 %>% 
+ mutate(decile = ntile(cate, 4), 
+        risk_charge = ntile(CHARGE_AF, 4))
+
+data.cate_graph <- 
+  temp2 %>% 
+  group_by(quart, group) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time)) %>% 
+  mutate(rate = count/time * 100 )  
+
+results.cate <- data.cate_graph %>% 
+ select(quart, group, count, time, rate) %>% 
+  pivot_wider(names_from = c("group"),
+              values_from = c('time','count','rate')) %>% 
+   mutate(var = count_C/time_C^2 + count_I/time_I^2,
+         ir1 = count_C/time_C,  
+         ir2 = count_I/time_I, 
+         UL =  ((ir2-ir1) + 1.96*sqrt(var))*100,
+         LL =  ((ir2-ir1) - 1.96*sqrt(var))*100,
+         diff = (ir2 - ir1)*100) 
+
+d4_i = as.numeric(round(results.cate[4,10] * 100, 2))
+d4_c = as.numeric(round(results.cate[4,9] * 100, 2))
+d4_diff = as.numeric(round(results.cate[4,13], 2))
+d4_LL = as.numeric(round(results.cate[4,12], 2))
+d4_UL = as.numeric(round(results.cate[4,11], 2))
+
+m1 <-  glm(outcome ~ group * quart + offset(log(follow_time)), family = "poisson", data=temp2)
+pval_cate_interaction <- round(car::Anova(m1, type = 3, test.statistic = "LR")[3,3],2)
+
+```
+
+
+**Effect-based Approach**
+
+  Participants whose predicted screening effect was in the highest quartile (estimated by the effect-based model) had a statistically significant increase in AF diagnoses (`r d4_i` vs. `r d4_c` per 100 person-years, rate difference `r d4_diff` per 100 person-years, 95% CI `r d4_LL` to `r d4_UL`) (**Figure 1**). In the remaining quartiles, the observed rates of AF diagnosis in the screening and usual care groups were not significantly different. Overall, there was a monotonic increase in observed screening efficacy and interaction was statistically significant (p-value `r pval_cate_interaction`). 
+
+```{r text risk, echo=FALSE }
+temp2 <- temp2 %>% 
+ mutate(decile = ntile(cate, 4), 
+        risk_charge = ntile(CHARGE_AF, 4))
+
+data.risk_graph <- 
+  temp2 %>% 
+  group_by(risk_charge, group) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time)) %>% 
+  mutate(rate = count/time * 100 )  
+
+results.risk <- data.risk_graph %>% 
+ select(risk_charge, group, count, time, rate) %>% 
+  pivot_wider(names_from = c("group"),
+              values_from = c('time','count','rate')) %>% 
+   mutate(var = count_C/time_C^2 + count_I/time_I^2,
+         ir1 = count_C/time_C,  
+         ir2 = count_I/time_I, 
+         UL =  ((ir2-ir1) + 1.96*sqrt(var))*100,
+         LL =  ((ir2-ir1) - 1.96*sqrt(var))*100,
+         diff = (ir2 - ir1)*100) 
+
+d4_i.charge = as.numeric(round(results.risk[4,10] * 100, 2))
+d4_c.charge = as.numeric(round(results.risk[4,9] * 100, 2))
+d4_diff.charge = as.numeric(round(results.risk[4,13], 2))
+d4_LL.charge = as.numeric(round(results.risk[4,12], 2))
+d4_UL.charge = as.numeric(round(results.risk[4,11], 2))
+
+m2 <-  glm(outcome ~ group * risk_charge + offset(log(follow_time)), family = "poisson", data=temp2)
+pval_risk_interaction <- round(car::Anova(m2, type = 3, test.statistic = "LR")[3,3],2)
+
+```
+
+
+**Risk-based Approach**
+
+  Participants whose predicted screening effect was in the highest risk (estimated by the CHARGE-AF score) had a statistically significant increase in AF diagnoses (`r d4_i.charge` vs. `r d4_c.charge` per 100 person-years, rate difference `r d4_diff.charge` per 100 person-years, 95% CI `r d4_LL.charge` to `r d4_UL.charge`) (**Figure 2**). In the remaining quartiles, the observed rates of AF diagnosis in the screening and usual care groups were not significantly different. Overall, there was not a monotonic increase in observed screening efficacy and the interaction was not statistically significant (p-value `r pval_risk_interaction`). In a sensitivity analysis, we determined that an internally optimized risk model also did not identify a subgroup where screening was effective (**Supplemental Figure S5**). 
+
+
+**Patient characteristics of effective screening groups**
+
+  In **Figure 3**, we display patient characteristics by quartile of screening effect. Participants with higher BMI, greater number of PCP visits in the prior year, and higher heart rates were overrepresented in the lowest screening efficacy quartile. High systolic blood pressure, vascular disease, and advanced age were more common in the highest quartile of screening efficacy. Several characteristics displayed a U-shaped relationship, such as hypertension, 12-lead ECG in the prior year, and congestive heart failure.
+
+**Patient characteristics of risk groups**
+  
+  In **Figure 4**, we display the patient characteristics by quartile of risk estimated using the CHARGE-AF score. Black participants, Hispanic participants, and women were overrepresented in the lowest risk quartile. As expected, predictors used to calculate the CHARGE-AF score were more common in highest risk quartile, including older age; higher height, weight, and blood pressure; smoking history; White racial identity; antihypertensive medication use; or diagnosis of diabetes, CHF, or prior MI. Among variables not directly used to calculate CHARGE-AF, we found that participants in the highest risk quartile were more likely to be male, have chronic kidney disease, and anemia. 
+
+```{r text correlation, echo= FALSE}
+cor(temp2$cate, temp2$CHARGE_AF, method = "spearman") -> rho
+
+library(gtsummary)
+temp2 <- mutate(temp2, 
+                group2 = ifelse(
+                  quart==4 & risk_charge ==4, 
+                  "High risk & High efficacy",
+                  ifelse(
+                    quart == 4,
+                    "High efficacy & Low risk",
+                    ifelse(
+                      risk_charge == 4,
+                      "High risk & Low efficacy",
+                      NA
+                    )
+                  )
+                )
+                )
+
+# temp2 %>% 
+#   mutate(
+#     eff = ifelse(
+#       quart == 4, 
+#       "High efficacy",
+#       "Low efficacy"
+#     ), 
+#     risk = ifelse(
+#       risk_charge == 4,
+#       "High risk",
+#       "Low risk"
+#     )
+#   ) %>% 
+#   count(eff, risk) %>% 
+#   pivot_wider(names_from = eff, values_from = n, values_fill = list(n = 0))
+
+#summary(as.factor(temp2$group2))
+text.co.joint <- nrow(temp2) - nrow(filter(temp2, is.na(group2)))
+text.co.percent <- round(text.co.joint / nrow(temp2) * 100, 0)   
+text.co.highboth <- nrow(filter(temp2, group2 == "High risk & High efficacy")) 
+text.co.highcateonly <- nrow(filter(temp2, group2 == "High efficacy & Low risk")) 
+text.co.highriskonly <- nrow(filter(temp2, group2 == "High risk & Low efficacy")) 
+```
+
+**Relationship between predicted risk and predicted treatment effect**
+
+  The predicted risk of new AF and the predicted AF screening effect have a non-monotonic relationship. In **Figure 6**, we plot the relationship between the percentile of baseline AF risk measured by the CHARGE-AF score against predicted AF screening effect. Predicted screening effect and predicted baseline risk were weakly correlated (Spearman coefficient `r round(rho, 2)`). 
+  
+  In the study `r text.co.joint` (`r text.co.percent`%) were in either the high efficacy quartile or the high risk quartile. In this group, `r text.co.highboth` were in  the high efficacy/high risk group, while `r text.co.highcateonly` were in the high efficacy/low risk group and `r text.co.highriskonly` were low efficacy/high risk group (Supplemental table X). Compared to the low efficacy/high risk group, participants in the high efficacy/low risk group were younger, had fewer visits in the prior year, and were more likely to be female, and Black. Additionally, they were less likely to have hypertension, diabetes, or congestive heart failure (Supplemental Table X). 
+  
+
+**Abstract result section **
+
+Results: Baseline characteristics were similar between the screening (n=`r nrow(VITAL_I)`) and usual care (n=`r nrow(VITAL_C)`) groups (mean age `r text.age` years, `r text.women`% female). In the effect-based analysis, in the highest quartile of predicted screening efficacy, AF diagnosis rates were higher in the screening group (`r d4_i` vs. `r d4_c` per 100 person-years, rate difference `r d4_diff`, 95% CI `r d4_LL` to `r d4_UL`). In the risk-based analysis, in the highest quartile of baseline AF risk, AF diagnosis rates were higher in the screening group (`r d4_i.charge` vs. `r d4_c.charge` per 100 person-years, rate difference `r d4_diff.charge`, 95% CI `r d4_LL.charge` to `r d4_UL.charge`). Predicted screening effectiveness efficacy and predicted baseline AF risk were weakly correlated (Spearman coefficient `r round(rho, 2)`).
+
+
+```{r, echo=FALSE}
+cor(temp2$pAF_under_c, temp2$CHARGE_AF, method = "spearman") -> rho.internal
+```
+
+
+**Supplement S6 legend ** 
+
+The CHARGE-AF score has a potential disadvantage because it was developed externally, while the effect-based score was developed within the study. We tested the robustness of our primary finding by using an internally optimized risk model. Recall that we created a risk model to estimate the likelihood of AF under usual care when estimating the effect-base score (a "VITAL-AF risks score"). We find that the VITAL-AF risk score and the CHARGE-AF score are highly correlated (Spearman coefficient `r round(rho.internal, 2)`). Further, when we repeat the analysis, we find no heterogeneity of screening effect when using the internally developed risk score.
+
+```{r, echo=FALSE}
+## RUN THIS CODE TO KNIT. 
+#library(rmarkdown)
+#render("/Users/sachinshah/Partners HealthCare Dropbox/Sachin Shah/VITAL_HTE/Results text v2.Rmd")
+```
+

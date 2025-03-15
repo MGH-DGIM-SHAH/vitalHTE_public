@@ -1,0 +1,1484 @@
+---
+title: "Results section"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+date: ''
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+options(scipen = 100)
+library("tidyverse")
+rm(list=ls())
+load("~/real lasso v13-1 2024-04-30 no ICD.RData")
+
+temp2 <- mutate(temp2, quart= ntile(cate, 4), 
+                risk_charge = ntile(CHARGE_AF, 4))
+
+VITAL_C <- filter(temp2, group == 'C')
+VITAL_I <- filter(temp2, group == 'I')
+
+sachin_theme <- theme_bw()+
+  theme(
+    panel.background = element_blank(), 
+    axis.line = element_line(colour = "grey75"),
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_line(color = "grey", linetype = "dotted" ),
+    panel.grid.minor.y = element_blank(),
+    legend.position = "none", 
+    axis.title=element_text(size=10)
+  )
+
+sachin_theme_leg <- theme_bw()+
+        theme(
+          panel.background = element_blank(), 
+          axis.line = element_line(colour = "grey75"),
+          panel.border = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          panel.grid.major.y = element_line(color = "grey", linetype = "dotted" ),
+          panel.grid.minor.y = element_blank(),
+          legend.position = "top", 
+          legend.title = element_blank(),
+          axis.title=element_text(size=10),
+          plot.caption = element_text(hjust = 0, face= "italic"), #Default is hjust=1
+          plot.title.position = "plot", #NEW parameter. Apply for subtitle too.
+          plot.caption.position =  "plot" #NEW parameter
+          )
+```
+
+**TABLES AND FIGURES**
+
+**Table 1: Patient characteristics by randomization arm**
+
+```{r table 1, echo = FALSE}
+
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(gtsummary)
+
+VITAL$group <- factor(VITAL$group, levels = c("I", "C"), labels = c("Screening", "Control"))
+VITAL$race <- factor(VITAL$racecat, levels = c(1, 2, 3, 4, 9), labels = c("White", "Black", "Hispanic", "Other", "Other"))
+VITAL$women <- ifelse(VITAL$Gender =="Female", 1, 0)
+
+n_control <- nrow(filter(VITAL, group =="Control"))
+n_screening <- nrow(filter(VITAL, group =="Screening"))
+
+trial2 =
+  VITAL %>%
+  select(group, age, women, race, SBP, DBP, HR, weight_kg, height_cm, 
+         lang_english, CurrentSmoker, HTN, CAD, DBM, CHF, PriorSTR, 
+         VAS, Anemia, Bleed, Renal, meds_HTN, meds_oac, meds_RateControl, 
+         meds_Antiarrhythmic, ecg12L_prior1y, pcpvsts_prior1y, CHARGE_AF)
+
+t1   <- tbl_summary(
+  trial2, 
+  by = "group", 
+  statistic = list(all_continuous() ~ "{mean} ({sd})",
+                 all_categorical() ~ "{n} ({p}%)"), 
+  label = list(age ~ "Age, mean (SD), yrs", 
+              women ~ "Female sex, n (%)", 
+              race ~ "Race, n (%)",
+              SBP ~ "Systolic blood pressure, mean (SD), mmHg", 
+              DBP ~ "Diastolic blood pressure, mean (SD), mmHg", 
+              HR ~ "Heart rate, mean (SD), bpm",
+              height_cm ~ "Height, mean (SD), cm", 
+              weight_kg ~ "Weight, mean (SD), kg", 
+              lang_english ~ "English language preference, n (%)",
+              CurrentSmoker ~"Current smoking, n (%)", 
+              HTN ~ "Hypertension, n (%)",
+              CAD ~ "Coronary artery disease, n (%)",
+              DBM ~ "Diabetes, n (%)",
+              CHF ~ "Congestive heart failure, n (%)",
+              PriorSTR ~ "Prior stroke, n (%)",
+              VAS ~ "Vascular disease, n (%)",
+              Anemia ~ "Anemia, n (%)",
+              Bleed ~ "Bleeding history, n (%)",
+              Renal ~ "Chronic kidney disease, n (%)",
+              meds_HTN ~ "Antihypertensive medication, n (%)",
+              meds_oac ~ "Oral anticoagulant use, n (%)",
+              meds_RateControl ~"Rate control medication use, n (%)",
+              meds_Antiarrhythmic ~ "Antiarrhythmic medication use, n (%)",
+              ecg12L_prior1y ~ "12 lead ECG in prior year, n (%)",
+          #    ICD_prior3y ~ "Indwelling cardiac rhythm device prior 3 yrs, n (%)",
+              pcpvsts_prior1y ~ "PCP visits in the prior year, mean (SD)", 
+              CHARGE_AF ~ "CHARGE-AF score, mean (SD)"
+              )) 
+
+ t1 %>%   modify_footnote(c(all_stat_cols()) ~ NA) %>%
+   ## remove automatic footnote
+          modify_header(stat_1 =paste0("**Screening**", "  \n(n=", n_screening, ")"),
+                        stat_2 =paste0("**Usual care**", "  \n(n=", n_control, ")")) %>% 
+   as_gt() %>% 
+   gt::gtsave(paste0("Tables and Figures/RR_Table 1 ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".docx"))
+
+#to vieww when knit 
+  t1 %>%   modify_footnote(c(all_stat_cols()) ~ NA) %>%
+          modify_header(stat_1 =paste0("**Screening**", "  \n(n=", n_screening, ")"),
+                        stat_2 =paste0("**Usual care**", "  \n(n=", n_control, ")"))
+
+```
+
+
+
+**Figure 1: Heterogeneity of Treatment Effect using an Effect-based Model **
+```{r figure 1 screening effect, echo = FALSE}
+
+library("tidyverse")
+library("patchwork")
+
+data.cate_graph <- 
+  temp2 %>% 
+  group_by(quart, group) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time)) %>% 
+  mutate(rate = count/time * 100 )  
+
+data.cate_graph %>% 
+  select(quart, group, count, time, rate) %>% 
+  pivot_wider(names_from = c("group"),
+              values_from = c('time','count','rate')) %>% 
+  mutate(var = count_C/time_C^2 + count_I/time_I^2,
+         ir1 = count_C/time_C,  
+         ir2 = count_I/time_I, 
+         UL =  ((ir2-ir1) + 1.96*sqrt(var))*100,
+         LL =  ((ir2-ir1) - 1.96*sqrt(var))*100,
+         diff = (ir2 - ir1)*100) -> data.forest
+
+set.digits =2
+
+base_data <- tibble::tibble(mean  = data.forest$diff,
+                            lower = data.forest$LL,
+                            upper = data.forest$UL,
+                            quartile = c("1 (lowest)", "2", "3", "4 (highest)"),
+                            control = paste(
+                                        format(
+                                          round(
+                                            data.forest$ir1*100,
+                                            set.digits),
+                                          nsmall=set.digits
+                                        ),
+                                        " ",  
+                                        "(",
+                                        data.forest$count_C,
+                                        "/",
+                                        round(data.forest$time_C,
+                                              0),
+                                        ")", 
+                                        sep = ""),
+                            intervention = paste(
+                                            format(
+                                              round(
+                                                data.forest$ir2*100,
+                                                set.digits
+                                                ),
+                                              nsmall=set.digits),
+                                              " ",  "(",data.forest$count_I,"/",round(data.forest$time_I, 0),")", sep = ""),
+                            Observed_efficacy = paste0(format(round(data.forest$diff,set.digits),nsmall=set.digits), " (", format(round(data.forest$LL,set.digits), nsmall=set.digits), " to ", format(round(data.forest$UL,set.digits), nsmall=set.digits),")"))
+                        
+base_data$quartile <- factor(base_data$quartile, levels = c('4 (highest)', '3', '2', '1 (lowest)'))
+
+forest_data <- select(base_data, c(quartile, control, intervention, Observed_efficacy))
+forest_data$control <- as.character(forest_data$control)
+forest_data$intervention <- as.character(forest_data$intervention)
+estimate_lab = paste0(round(data.forest$diff, set.digits), " (", round(data.forest$LL, set.digits), "-", round(data.forest$UL, set.digits), ")")
+
+geom.text.size = 3
+
+p_left <- 
+  forest_data  |>
+  ggplot(aes(y = quartile)) + 
+  geom_text(aes(x = 0, label = quartile), hjust = 0, size=geom.text.size) +
+  geom_text(aes(x = 1.1, label = control), hjust = 0, size=geom.text.size) + 
+  geom_text(aes(x = 2.2, label = intervention),hjust = 0,  size=geom.text.size) +
+  geom_text(aes(x = 3.3, label = Observed_efficacy), hjust = 0,  size=geom.text.size) + 
+  annotate("text", x = 0,  y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Quartile of \npredicted effectiveness")  +
+  annotate("text", x = 1.1, y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Usual care,\nobserved events per 100py\n(cases/py)")  +
+  annotate("text", x = 2.2, y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Screening\nobserved events per 100py\n(cases/py)")   +
+  annotate("text", x = 3.3, y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Observed rate\ndifference (95% CI)")  +
+  theme_void() +
+  coord_cartesian(xlim = c(0, 4), ylim = c(0.5, (11-6)))
+
+
+p_mid <- 
+  base_data |>
+  ggplot(aes(y = quartile)) + 
+  theme_classic()+ 
+  geom_point(aes(x=mean), shape=15, size=3) +
+  geom_linerange(aes(xmin=lower, xmax=upper)) + 
+  geom_vline(xintercept = 0, linetype="dashed") +
+  scale_x_continuous(name = "Rate difference (95% CI)", 
+                     limits = c(-1.5,2.6), 
+                     breaks = c(seq(from = -1.5, to = 2.5, by = 0.5))) + 
+  annotate("text", x = -1, y = (11-6), label = "Favors usual care", size=geom.text.size, fontface = "bold",) + 
+  annotate("text", x = 1, y = (11-6), label = "Favors screening", size=geom.text.size, fontface = "bold",) + 
+  theme(axis.line.y = element_blank(),
+        axis.ticks.y= element_blank(),
+        axis.text.y= element_blank(),
+        axis.title.y= element_blank(), 
+        axis.title.x =element_text(size = 9))+
+  coord_cartesian(ylim = c(0.5, (11-6)))
+
+
+p_left + p_mid + plot_layout(width = c(2, 1))
+
+ggsave(paste0("Tables and Figures/RR_Fig1_Forest_plot_CATE ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), width = 12, height = 7)   
+
+m1 <-  glm(outcome ~ group * quart + offset(log(follow_time)), family = "poisson", data=temp2)
+summary(m1)
+pval_cate_interaction <- car::Anova(m1, type = 3, test.statistic = "LR")[3,3]
+
+```
+
+
+**Figure 2: Heterogeneity of Treatment Effect using a Risk-based Model**
+
+```{r figure 2 risk effect, echo = FALSE}
+library("patchwork")
+
+#Prep risk data
+data.risk_graph <- temp2 %>% 
+  group_by(risk_charge, group) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time)) %>% 
+  mutate(rate = count/time * 100 )  
+
+data.risk_graph %>% 
+  select(risk_charge, group, count, time, rate) %>% 
+  pivot_wider(names_from = c("group"),
+              values_from = c('time','count','rate')) %>% 
+  mutate(var = count_C/time_C^2 + count_I/time_I^2,
+         ir1 = count_C/time_C,  
+         ir2 = count_I/time_I, 
+         UL =  ((ir2-ir1) + 1.96*sqrt(var))*100,
+         LL =  ((ir2-ir1) - 1.96*sqrt(var))*100,
+         diff = (ir2 - ir1)*100) -> data.forest
+
+
+set.digits =2
+
+base_data <- tibble::tibble(mean  = data.forest$diff,
+                            lower = data.forest$LL,
+                            upper = data.forest$UL,
+                            quartile = c("1 (lowest)", "2", "3", "4 (highest)"),
+                            control = paste(
+                                        format(
+                                          round(
+                                            data.forest$ir1*100,
+                                            set.digits),
+                                          nsmall=set.digits
+                                        ),
+                                        " ",  
+                                        "(",
+                                        data.forest$count_C,
+                                        "/",
+                                        round(data.forest$time_C,
+                                              0),
+                                        ")", 
+                                        sep = ""),
+                            intervention = paste(
+                                            format(
+                                              round(
+                                                data.forest$ir2*100,
+                                                set.digits
+                                                ),
+                                              nsmall=set.digits),
+                                              " ",  "(",data.forest$count_I,"/",round(data.forest$time_I, 0),")", sep = ""),
+                            Observed_efficacy = paste0(format(round(data.forest$diff,set.digits),nsmall=set.digits), " (", format(round(data.forest$LL,set.digits), nsmall=set.digits), " to ", format(round(data.forest$UL,set.digits), nsmall=set.digits),")"))
+                        
+base_data$quartile <- factor(base_data$quartile, levels = c('4 (highest)', '3', '2', '1 (lowest)'))
+
+forest_data <- select(base_data, c(quartile, control, intervention, Observed_efficacy))
+forest_data$control <- as.character(forest_data$control)
+forest_data$intervention <- as.character(forest_data$intervention)
+estimate_lab = paste0(round(data.forest$diff, set.digits), " (", round(data.forest$LL, set.digits), "-", round(data.forest$UL, set.digits), ")")
+
+geom.text.size = 3
+
+p_left <- 
+  forest_data  |>
+  ggplot(aes(y = quartile)) + 
+  geom_text(aes(x = 0, label = quartile), hjust = 0, size=geom.text.size) +
+  geom_text(aes(x = 1.1, label = control), hjust = 0, size=geom.text.size) + 
+  geom_text(aes(x = 2.2, label = intervention),hjust = 0,  size=geom.text.size) +
+  geom_text(aes(x = 3.3, label = Observed_efficacy), hjust = 0,  size=geom.text.size) + 
+  annotate("text", x = 0,  y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Quartile of predicted risk")  +
+  annotate("text", x = 1.1, y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Usual care,\nobserved events per 100py\n(cases/py)")  +
+  annotate("text", x = 2.2, y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Screening\nobserved events per 100py\n(cases/py)")   +
+  annotate("text", x = 3.3, y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Observed rate\ndifference (95% CI)")  +
+  theme_void() +
+  coord_cartesian(xlim = c(0, 4), ylim = c(0.5, (11-6)))
+
+
+p_mid <- 
+  base_data |>
+  ggplot(aes(y = quartile)) + 
+  theme_classic()+ 
+  geom_point(aes(x=mean), shape=15, size=3) +
+  geom_linerange(aes(xmin=lower, xmax=upper)) + 
+  geom_vline(xintercept = 0, linetype="dashed") +
+  scale_x_continuous(name = "Rate difference (95% CI)", 
+                     limits = c(-1.5,2.6), 
+                     breaks = c(seq(from = -1.5, to =2.5, by = 0.5))) + 
+  annotate("text", x = -1, y = (11-6), label = "Favors usual care", size=geom.text.size, fontface = "bold",) + 
+  annotate("text", x = 1, y = (11-6), label = "Favors screening", size=geom.text.size, fontface = "bold",) + 
+  theme(axis.line.y = element_blank(),
+        axis.ticks.y= element_blank(),
+        axis.text.y= element_blank(),
+        axis.title.y= element_blank(), 
+        axis.title.x =element_text(size = 9))+
+  coord_cartesian(ylim = c(0.5, (11-6)))
+
+
+p_left + p_mid + plot_layout(width = c(2, 1))
+
+
+
+ggsave(paste0("Tables and Figures/RR_Fig_Forest_plot_risk", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), width = 10, height = 7)   
+
+
+m2 <-  glm(outcome ~ group * risk_charge + offset(log(follow_time)), family = "poisson", data=temp2)
+summary(m2)
+pval_risk_interaction <- car::Anova(m2, type = 3, test.statistic = "LR")[3,3]
+```
+
+
+**Figure 3: Heatmap of patient characteristics by quartile of predicted screening efficacy **
+
+```{r figure 3 heat map, echo = FALSE}
+
+library("gt")
+library("gtsummary")
+library("webshot2")
+library("writexl")
+library("tidyverse")
+
+temp3 <- temp2 %>% mutate(White = racecat == "1", 
+                          Black = racecat == "2", 
+                          Hispanic = racecat == "3", 
+                          `Other race` = racecat %in% c("4", "9"),
+                          Male = Gender == "Male", 
+                          Female = Gender == "Female")
+
+# Renaming of cols and vars
+column_mapping <- c(
+  "age" = "Age, yrs",
+  "height_cm" = "Height, cm",
+  "weight_kg" = "Weight, kg",
+  "BMI" = "Body mass index, kg/m2",
+  "SBP" = "Systolic blood pressure, mmHg",
+  "DBP" = "Diastolic blood pressure, mmHg",
+  "CHARGE_AF" = "CHARGE-AF score",
+  "CHADSVASc" = "CHA2DS2-VASc score",
+  "CurrentSmoker" = "Current smoker",
+  "HTN" = "Hypertension",
+  "CAD" = "Coronary artery disease",
+  "DBM" = "Diabetes",
+  "CHF" = "Congestive heart failure",
+  "PriorSTR" = "Prior stroke",
+  "VAS" = "Vascular disease",
+  "meds_HTN" = "Antihypertensive medications",
+  "meds_oac" = "Oral anticoagulants",
+  "HR" = "Heart rate, beats per minute",
+  "pcpvsts_prior1y" = "PCP visits in the prior year",
+  "Renal" = "Chronic kidney disease",
+  "meds_RateControl" = "Rate control medication use",
+  "meds_Antiarrhythmic" = "Antiarrhythmic medication use",
+  "ecg12L_prior1y" = "12 lead ECG in prior year",
+  "quart" = "Quartile",
+  "Female" = "Female", 
+  "Male" = "Male", 
+  "White" = "White", 
+  "Black" = "Black", 
+  "Hispanic" = "Hispanic",
+  "Other race" = "Other race",
+  "lang_english" = "English language preference",
+  "Anemia" = "Anemia",
+  "Bleed" = "Bleeding history")
+
+VITAL_T <- temp3[, names(temp3) %in% names(column_mapping)]
+colnames(VITAL_T) <- column_mapping[names(VITAL_T)]
+
+summary <- VITAL_T %>%
+  mutate(quart = as.factor(Quartile)) %>%
+  group_by(Quartile) %>%
+  select(Quartile, `Age, yrs`, Male, Female, White, Black, Hispanic,`Other race`, `Systolic blood pressure, mmHg`, `Diastolic blood pressure, mmHg`, `Heart rate, beats per minute`, `Weight, kg`, `Height, cm`, `Body mass index, kg/m2`, `CHARGE-AF score`, `CHA2DS2-VASc score`, `English language preference`, `Current smoker`, `Hypertension`, `Coronary artery disease`, `Diabetes`, `Congestive heart failure`, `Prior stroke`, `Vascular disease`, `Anemia`, `Bleeding history`, `Chronic kidney disease`, `Antihypertensive medications`, `Oral anticoagulants`, `Rate control medication use`, `Antiarrhythmic medication use`, `12 lead ECG in prior year`, `PCP visits in the prior year`) %>% 
+  tbl_summary(
+    by = c(Quartile),
+    type = list(`CHA2DS2-VASc score` ~ "continuous"),
+    statistic = all_continuous() ~ "{mean} ({sd})",
+    missing = "no", )
+
+fig1 <- as_gt(summary) %>%
+  text_transform(
+    locations = cells_body(),
+    fn = function(x) {
+      str_replace_all(x,
+                      pattern = "@",
+                      replacement = "<sub>") %>% 
+        str_replace_all("~",
+                        "</sub>") }
+  )%>% 
+  gt::tab_header(title = "Summary Characteristics by Quartile of Screening Effect")
+
+heatmap_df<- as.data.frame(fig1)
+
+# Reshape the data for creating a heatmap
+reshaped_data <- heatmap_df %>%
+  tidyr::pivot_longer(cols = starts_with("stat_"),
+                      names_to = "Quartile",
+                      values_to = "Value") %>%
+  arrange(variable, Quartile) %>%
+  select(-row_type)
+
+reshaped_data$Value <- as.numeric(gsub("[^0-9.]+", "", gsub("\\([^\\)]+\\)", "", reshaped_data$Value, perl = TRUE)))
+
+# Edit the Decile column
+reshaped_data$Quartile <- gsub("stat_", "", reshaped_data$Quartile)
+
+# Order the data by Decile
+reshaped_data <- reshaped_data %>%
+  arrange(variable, Quartile)
+
+reshaped_data$Quartile <- factor(reshaped_data$Quartile, levels = c('1','2','3','4'))
+reshaped_data$label <- as.character(reshaped_data$label)
+
+
+#standardize
+dummy<- reshaped_data %>%
+  group_by(variable) %>%
+  mutate(Norm_Value = (Value - mean(Value, na.rm = TRUE)) / sd(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+dummy<- dummy %>%
+  mutate(NewValue = as.character(Value), # Convert to character to replace text patterns
+         NewValue = sub("\\.00$", "", NewValue))
+
+
+#Filter to correct for proportion
+heatmap_categorical <- filter(dummy, var_type == 'dichotomous' | var_type == 'categorical')
+
+vec <- c(length(which(temp2$quart == 1)), length(which(temp2$quart == 2)), length(which(temp2$quart == 3)), length(which(temp2$quart == 4)))
+
+heatmap_categorical$values_divided <- heatmap_categorical $Value / vec[(1:nrow(heatmap_categorical) - 1) %% length(vec) + 1]
+
+heatmap_categorical$values_divided <- heatmap_categorical$values_divided * 100
+heatmap_categorical$values_divided<- round(heatmap_categorical$values_divided, 0)
+
+heatmap_categorical$NewValue <- heatmap_categorical$values_divided
+
+heatmap_categorical <- select(heatmap_categorical, -(values_divided))
+
+heatmap_categorical$NewValue <- paste(heatmap_categorical$NewValue, '%', sep = '')
+heatmap_continuous <- filter(dummy, var_type == 'continuous')
+
+heatmap_df_final <- rbind(heatmap_categorical, heatmap_continuous)
+
+# Change ordering and labels 
+heatmap_df_final$Quartile <- factor(heatmap_df_final$Quartile, levels = c(1,2,3,4))
+
+heatmap_df_final <- heatmap_df_final %>%
+  mutate(variable = ifelse(variable == "Body mass index, kg/m2", "Body mass index, kg/m\u00B2", variable))
+
+# Order rows by highest to lowest Z-score in Quartile 1
+# Filter for decile 1
+heatmap_df_dec1 <- filter(heatmap_df_final, Quartile == 1)
+heatmap_df_dec1 <- heatmap_df_dec1[order(heatmap_df_dec1$Norm_Value), ]
+heatmap_df_dec1 <- na.omit(heatmap_df_dec1)
+heatmap_ordering <- heatmap_df_dec1$variable
+
+heatmap_df_final$variable <- factor(heatmap_df_final$variable, levels = heatmap_ordering)
+
+plot.heatmap.cate <- ggplot(heatmap_df_final, aes(x = Quartile, y = variable, parse = T)) +
+  geom_tile(aes(fill = Norm_Value), color = "white") +
+  geom_text(aes(label = NewValue), vjust = 0.5, size = 2.5, color = "grey15") +  # Adjust vjust as needed
+  scale_fill_gradient(low = "white", high = "#FD193D") +
+  labs(x = "Quartile of Predicted Screening Effectiveness (1=lowest, 4=highest)", y = "",
+       fill = "Z-Score", size = 3.2) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        axis.text.y = element_text(colour = "black"), 
+        axis.text.x = element_text(colour = "black"))
+
+rm(temp3, VITAL_T, reshaped_data, heatmap_categorical, heatmap_continuous, heatmap_df, heatmap_df_dec1, heatmap_df_final, dummy, fig1, column_mapping, heatmap_ordering, vec, summary)
+
+plot.heatmap.cate
+
+ggsave(paste0("Tables and Figures/RR_Fig3_heatmap_cate ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), plot.heatmap.cate, width = 7, height = 8)   
+
+```
+
+
+**Figure 4: Heatmap of patient characteristics by quartile of predicted risk of AF**
+```{r figure 4 risk heat map, echo = FALSE}
+
+library("gt")
+library("gtsummary")
+library("webshot2")
+library("writexl")
+library("tidyverse")
+
+temp3 <- temp2 %>% mutate(White = racecat == "1", 
+                          Black = racecat == "2", 
+                          Hispanic = racecat == "3", 
+                          `Other race` = racecat %in% c("4", "9"),
+                          Male = Gender == "Male", 
+                          Female = Gender == "Female", 
+                          Quartile = ntile(CHARGE_AF, 4))
+
+# Renaming of cols and vars
+column_mapping <- c(
+  "age" = "Age, yrs",
+  "height_cm" = "Height, cm",
+  "weight_kg" = "Weight, kg",
+  "BMI" = "Body mass index, kg/m2",
+  "SBP" = "Systolic blood pressure, mmHg",
+  "DBP" = "Diastolic blood pressure, mmHg",
+  "CHARGE_AF" = "CHARGE-AF score",
+  "CHADSVASc" = "CHA2DS2-VASc score",
+  "CurrentSmoker" = "Current smoker",
+  "HTN" = "Hypertension",
+  "CAD" = "Coronary artery disease",
+  "DBM" = "Diabetes",
+  "CHF" = "Congestive heart failure",
+  "PriorSTR" = "Prior stroke",
+  "VAS" = "Vascular disease",
+  "meds_HTN" = "Antihypertensive medications",
+  "meds_oac" = "Oral anticoagulants",
+  "HR" = "Heart rate, beats per minute",
+  "pcpvsts_prior1y" = "PCP visits in the prior year",
+  "Renal" = "Chronic kidney disease",
+  "meds_RateControl" = "Rate control medication use",
+  "meds_Antiarrhythmic" = "Antiarrhythmic medication use",
+  "ecg12L_prior1y" = "12 lead ECG in prior year",
+  "Quartile" = "Quartile",
+  "Female" = "Female", 
+  "Male" = "Male", 
+  "White" = "White", 
+  "Black" = "Black", 
+  "Hispanic" = "Hispanic",
+  "Other race" = "Other race",
+  "lang_english" = "English language preference",
+  "Anemia" = "Anemia",
+  "Bleed" = "Bleeding history")
+
+VITAL_T <- temp3[, names(temp3) %in% names(column_mapping)]
+colnames(VITAL_T) <- column_mapping[names(VITAL_T)]
+
+summary <- VITAL_T %>%
+  mutate(Quartile = as.factor(Quartile)) %>%
+  group_by(Quartile) %>%
+  select(Quartile, `Age, yrs`, Male, Female, White, Black, Hispanic,`Other race`, `Systolic blood pressure, mmHg`, `Diastolic blood pressure, mmHg`, `Heart rate, beats per minute`, `Weight, kg`, `Height, cm`, `Body mass index, kg/m2`, `CHARGE-AF score`, `CHA2DS2-VASc score`, `English language preference`, `Current smoker`, `Hypertension`, `Coronary artery disease`, `Diabetes`, `Congestive heart failure`, `Prior stroke`, `Vascular disease`, `Anemia`, `Bleeding history`, `Chronic kidney disease`, `Antihypertensive medications`, `Oral anticoagulants`, `Rate control medication use`, `Antiarrhythmic medication use`, `12 lead ECG in prior year`, `PCP visits in the prior year`) %>% 
+  tbl_summary(
+    by = c(Quartile),
+    type = list(`CHA2DS2-VASc score` ~ "continuous"),
+    statistic = all_continuous() ~ "{mean} ({sd})",
+    missing = "no", )
+
+fig1 <- as_gt(summary) %>%
+  text_transform(
+    locations = cells_body(),
+    fn = function(x) {
+      str_replace_all(x,
+                      pattern = "@",
+                      replacement = "<sub>") %>% 
+        str_replace_all("~",
+                        "</sub>") }
+  )%>% 
+  gt::tab_header(title = "Summary Characteristics by Quartile of AF Risk")
+
+heatmap_df<- as.data.frame(fig1)
+
+# Reshape the data for creating a heatmap
+reshaped_data <- heatmap_df %>%
+  tidyr::pivot_longer(cols = starts_with("stat_"),
+                      names_to = "Quartile",
+                      values_to = "Value") %>%
+  arrange(variable, Quartile) %>%
+  select(-row_type)
+
+reshaped_data$Value <- as.numeric(gsub("[^0-9.]+", "", gsub("\\([^\\)]+\\)", "", reshaped_data$Value, perl = TRUE)))
+
+# Edit the Decile column
+reshaped_data$Quartile <- gsub("stat_", "", reshaped_data$Quartile)
+
+# Order the data by Decile
+reshaped_data <- reshaped_data %>%
+  arrange(variable, Quartile)
+
+reshaped_data$Quartile <- factor(reshaped_data$Quartile, levels = c('1','2','3','4'))
+reshaped_data$label <- as.character(reshaped_data$label)
+
+
+#standardize
+dummy<- reshaped_data %>%
+  group_by(variable) %>%
+  mutate(Norm_Value = (Value - mean(Value, na.rm = TRUE)) / sd(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+dummy<- dummy %>%
+  mutate(NewValue = as.character(Value), # Convert to character to replace text patterns
+         NewValue = sub("\\.00$", "", NewValue))
+
+
+#Filter to correct for proportion
+heatmap_categorical <- filter(dummy, var_type == 'dichotomous' | var_type == 'categorical')
+
+vec <- c(length(which(temp2$quart == 1)), length(which(temp2$quart == 2)), length(which(temp2$quart == 3)), length(which(temp2$quart == 4)))
+
+heatmap_categorical$values_divided <- heatmap_categorical $Value / vec[(1:nrow(heatmap_categorical) - 1) %% length(vec) + 1]
+
+heatmap_categorical$values_divided <- heatmap_categorical$values_divided * 100
+heatmap_categorical$values_divided<- round(heatmap_categorical$values_divided, 0)
+
+heatmap_categorical$NewValue <- heatmap_categorical$values_divided
+
+heatmap_categorical <- select(heatmap_categorical, -(values_divided))
+
+heatmap_categorical$NewValue <- paste(heatmap_categorical$NewValue, '%', sep = '')
+heatmap_continuous <- filter(dummy, var_type == 'continuous')
+
+heatmap_df_final <- rbind(heatmap_categorical, heatmap_continuous)
+
+# Change ordering and labels 
+heatmap_df_final$Quartile <- factor(heatmap_df_final$Quartile, levels = c(1,2,3,4))
+
+heatmap_df_final <- heatmap_df_final %>%
+  mutate(variable = ifelse(variable == "Body mass index, kg/m2", "Body mass index, kg/m\u00B2", variable))
+
+# Order rows by highest to lowest Z-score in Quartile 1
+# Filter for decile 1
+heatmap_df_dec1 <- filter(heatmap_df_final, Quartile == 1)
+heatmap_df_dec1 <- heatmap_df_dec1[order(heatmap_df_dec1$Norm_Value), ]
+heatmap_df_dec1 <- na.omit(heatmap_df_dec1)
+heatmap_ordering <- heatmap_df_dec1$variable
+
+heatmap_df_final$variable <- factor(heatmap_df_final$variable, levels = heatmap_ordering)
+
+plot.heatmap.risk <- ggplot(heatmap_df_final, aes(x = Quartile, y = variable, parse = T)) +
+  geom_tile(aes(fill = Norm_Value), color = "white") +
+  geom_text(aes(label = NewValue), vjust = 0.5, size = 2.5, color = "grey15") +  # Adjust vjust as needed
+  scale_fill_gradient(low = "white", high = "#354BF3") +
+  labs(x = "Quartile of Predicted AF Risk (1=lowest, 4=highest)", y = "",
+       fill = "Z-Score", size = 3.2) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        axis.text.y = element_text(colour = "black"), 
+        axis.text.x = element_text(colour = "black"))
+
+rm(temp3, VITAL_T, reshaped_data, heatmap_categorical, heatmap_continuous, heatmap_df, heatmap_df_dec1, heatmap_df_final, dummy, fig1, column_mapping, heatmap_ordering, vec, summary)
+
+plot.heatmap.risk
+
+ggsave(paste0("Tables and Figures/RR_Fig4_heatmap ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), plot.heatmap.risk, width = 7, height = 8)   
+
+```
+
+**Figure 5 Scatter plot**
+```{r fig 5 hex plot, echo = FALSE }
+
+library(RColorBrewer)
+temp2 %>%    
+    mutate(ptile_cate = (ntile(cate, 1000)) / 10,           
+           ptile_risk = (ntile(CHARGE_AF, 1000)) / 10) %>%    
+    ggplot(mapping = aes(x = ptile_risk, y = ptile_cate)) +    
+    geom_hex(bins = 25) +    
+    scale_fill_gradientn( 
+        name = "Count",  # Legend title
+        colors = colorRampPalette(rev(brewer.pal(11, 'Spectral')))(100),
+        guide = guide_colorbar(
+            title.position = "top", title.hjust = 0.5,  # Center the title
+            barwidth = 15,  # Increase color bar width
+            barheight = 0.7  # Keep it thin vertically to look balanced
+        )) +   
+    scale_x_continuous(
+        name = "Percentile of baseline predicted risk by CHARGE-AF score (0 = lowest, 100 = highest)", 
+        expand = c(0, 0)  # Removes extra space around x-axis
+    ) +   
+    scale_y_continuous(
+        name = "Percentile of predicted screening effectiveness (0 = lowest, 100 = highest)",
+        expand = c(0, 0)  # Removes extra space around y-axis
+    ) +   
+    theme_minimal() +   
+    theme(
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),  # Moves border to the plot area
+        panel.background = element_blank(),  # Ensures no additional background color
+        plot.background = element_blank(),   # Ensures no overall background color
+        panel.grid = element_blank(),  
+        axis.ticks = element_line(color = "black"),  # Adds tick marks
+        axis.ticks.length = unit(0.2, "cm"),  # Adjusts tick mark size
+        legend.position = "top",  # Moves legend to the top
+        legend.justification = "center",  # Centers legend horizontally
+        legend.text = element_text(size = 10),  # Adjust legend text size if needed
+        legend.title = element_text(size = 12, hjust = 0.5)  # Ensures "Count" is centered
+    ) -> plot.charge_x_cate
+
+ggsave(paste0("Tables and Figures/RR_Fig5 charge af x cate hex ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), plot.charge_x_cate, width = 7.2, height = 8)   
+
+```
+
+
+**Figure S1: Consort diagram **
+```{r consort, echo = FALSE}
+
+library(consort)
+library(haven)
+
+VITAL_consort$group <- factor(VITAL_consort$group, levels = c("I", "C"), labels = c("Screening", "Usual care"))
+
+
+VITAL_consort <- 
+  mutate(VITAL_consort, 
+        exc2 = ifelse(
+          PrevalentAF == 1, 
+          "Prevalent AF", 
+          ifelse(
+              ICD_prior3y==1,
+              "Intracardiac rhythm monitor",
+              NA
+                )
+                      )
+        )
+
+out <- consort_plot(data = VITAL_consort,
+             orders = c(group     = "Randomized patient",
+                        exc2    = "Excluded",
+                        mrn = "Outcome ascertainment",
+                        fow2    = "Excluded for missing data",
+                        mrn = "Final analysis"),
+                       side_box = c("exc2", "fow2"),
+                       allocation = "group")
+            
+
+plot(out)
+
+ggsave(paste0("Tables and Figures/RR consort ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), plot = build_grid(out), width = 9, height = 5) 
+
+```
+
+
+**Figure S2: Calibration of constituent models used to calculate effect scores using leave one out cross validation**
+**Figure S3: Receiver operator curves of constituent models used to calculate effect scores using leave one out cross validation**
+```{r supplemental model performance effect model, echo = FALSE}
+library(pROC)
+library(plotROC)
+
+temp2 <- temp2 %>% 
+  mutate(decilec = ntile(pAF_under_c, 10), 
+         decilei = ntile(pAF_under_i, 10)) 
+
+### Part 1: AUC
+
+## 1.1 control arm 
+temp3 <- temp2 %>%
+  filter(group =="C") %>%
+  mutate(adj_p = pAF_under_c * follow_time)
+
+# 1.1.1 plot
+roc.c <- ggplot(temp3, aes(m = adj_p, d = outcome))+
+  geom_roc(n.cuts=0,labels=FALSE) +
+  scale_x_continuous(name = "1 - Specificity") +
+  scale_y_continuous(name = "Sensitivity") +
+  geom_abline(intercept = 0, slope = 1) + 
+  theme_minimal()
+
+roc.c <- roc.c + labs(title=paste0("A. Usual care arm leave one out cross validation (AUC=", format(round(calc_auc(roc.c)$AUC, 2), nsmall=2),")"))
+
+# 1.1.2 threshold analysis @ 75th precentile
+
+roc.c.threhold <- (roc(temp3$outcome, temp3$adj_p))
+
+threshold.c<- ci.thresholds(roc.c.threhold, 
+              thresholds = quantile(temp3$adj_p, 0.75), 
+              boot.n = 10000, conf.level = 0.95, stratified = FALSE)
+
+threshold.c$specificity
+threshold.c$sensitivity
+
+## 1.2 intervention arm
+temp3 <- temp2 %>%
+  filter(group =="I") %>%
+  mutate(adj_p = pAF_under_i * follow_time)
+
+# 1.2.1 plot
+roc.i <- ggplot(temp3, aes(m = adj_p, d = outcome))+
+  geom_roc(n.cuts=0,labels=FALSE) +
+  scale_x_continuous(name = "1 - Specificity") +
+  scale_y_continuous(name = "Sensitivity") +
+  geom_abline(intercept = 0, slope = 1) + 
+  theme_minimal()
+
+roc.i <- roc.i + labs(title=paste0("B. Screening arm leave one out cross validation (AUC=", format(round(calc_auc(roc.i)$AUC, 2), nsmall=2),")"))
+
+#1.2.2 threshold analysis @ 75th precentile
+
+roc.i.threhold <- (roc(temp3$outcome, temp3$adj_p))
+
+threshold.i<- ci.thresholds(roc.i.threhold, 
+              thresholds = quantile(temp3$adj_p, 0.75), 
+              boot.n = 10000, conf.level = 0.95, stratified = FALSE)
+
+threshold.i$specificity
+threshold.i$sensitivity
+
+
+##1.3 Plot both
+roc.all <- gridExtra::grid.arrange(roc.c, roc.i, nrow = 1)
+ggsave(paste0("Tables and Figures/ROC for individual models", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), plot = roc.all, width = 11.5, height = 5)   
+
+### Part 2: Calibration plot 
+## 2.1 control arm
+data.cal <- 
+  temp2 %>% 
+  filter(group =="C") %>% 
+  mutate(pAF_under_c_x_time = pAF_under_c * follow_time) %>% 
+  group_by(decilec) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time), 
+            predicted = sum(pAF_under_c_x_time)) %>% 
+  mutate( rate = count/time, 
+          se = sqrt(count / time^2),
+          ul = rate + 1.96*se,
+          ll = rate - 1.96*se,
+          predicted_rate = predicted/time)
+
+data.cal %>% 
+  mutate(rate100 = rate * 100, 
+         ul_100 = ul * 100, 
+         ll_100 = ll * 100, 
+         predicted_rate_100 = predicted_rate * 100) %>% 
+  
+  ggplot(aes(x=predicted_rate_100, y=rate100, ymin=ll_100, ymax=ul_100)) + 
+  scale_y_continuous(limits=c(0,10), breaks=seq(0,10,by=1)) + 
+  scale_x_continuous(limits=c(0,10), breaks=seq(0,10,by=1)) + 
+  geom_abline()+
+  geom_smooth(method="loess", span = 1, se=FALSE,  color="red", formula=y~-1+x)+
+  geom_pointrange(size=0.8, color="black", shape=18) +
+  xlab("Predicted AF diagnosis rate per 100 person years") + 
+  ylab("Observed AF diagnosis rate per 100 person years") + 
+  theme_minimal() +
+  labs(title="A. Usual care arm leave one out cross validation") -> plot.cal.carm
+
+
+## 2.2 intervention arm
+
+data.cal <- 
+  temp2 %>% 
+  filter(group =="I") %>% 
+  mutate(pAF_under_i_x_time = pAF_under_i * follow_time) %>% 
+  group_by(decilec) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time), 
+            predicted = sum(pAF_under_i_x_time)) %>% 
+  mutate( rate = count/time, 
+          se = sqrt(count / time^2),
+          ul = rate + 1.96*se,
+          ll = rate - 1.96*se,
+          predicted_rate = predicted/time)
+
+data.cal %>% 
+  mutate(rate100 = rate * 100, 
+         ul_100 = ul * 100, 
+         ll_100 = ll * 100, 
+         predicted_rate_100 = predicted_rate * 100) %>% 
+  
+  ggplot(aes(x=predicted_rate_100, y=rate100, ymin=ll_100, ymax=ul_100)) + 
+  scale_y_continuous(limits=c(0,10), breaks=seq(0,10,by=1)) + 
+  scale_x_continuous(limits=c(0,10), breaks=seq(0,10,by=1)) + 
+  geom_abline()+
+  geom_smooth(method="loess", span =1, se=FALSE,  color="red", formula=y~-1+x)+
+  geom_pointrange(size=0.8, color="black", shape=18) +
+  xlab("Predicted AF diagnosis rate per 100 person years") + 
+  ylab("Observed AF diagnosis rate per 100 person years") + 
+  theme_minimal() +
+  labs(title="B. Screening arm leave one out cross validation") -> plot.cal.iarm
+
+cal.all <- gridExtra::grid.arrange(plot.cal.carm, plot.cal.iarm, nrow = 1)
+
+ggsave(paste0("Tables and Figures/RR_calibration for individual models ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), plot =cal.all, width = 11, height = 5)   
+
+```
+
+**Figure S4: Calibration of CHARGE-AF risk model in control and intervention arm **
+**Figure S5: Receiver operator curves of CHARGE-AF risk model in control and intervention arm**
+```{r supplemental model performance risk model, echo = FALSE}
+
+temp2 <- temp2 %>% 
+  mutate(decile_charge = ntile(CHARGE_AF_risk, 10))
+
+### Part 1 AUC
+
+## 1.1 Control arm
+temp3 <- temp2 %>%
+  filter(group =="C") %>%
+  mutate(adj_p = CHARGE_AF_risk/5 * follow_time)
+
+# 1.1.1 plot
+roc.c <- ggplot(temp3, aes(m = adj_p, d = outcome))+
+  geom_roc(n.cuts=0,labels=FALSE) +
+  scale_x_continuous(name = "1 - Specificity") +
+  scale_y_continuous(name = "Sensitivity") +
+  geom_abline(intercept = 0, slope = 1) + 
+  theme_minimal()
+
+roc.c <- roc.c + labs(title=paste0("A. Risk score in usual care arm (AUC=", format(round(calc_auc(roc.c)$AUC, 2), nsmall=2),")"))
+
+#1.2.2 threshold analysis @ 75th precentile
+roc.riskc.threhold <- (roc(temp3$outcome, temp3$adj_p))
+
+threshold.riskc<- ci.thresholds(roc.riskc.threhold, 
+              thresholds = quantile(temp3$adj_p, 0.75), 
+              boot.n = 10000, conf.level = 0.95, stratified = FALSE)
+
+threshold.riskc$specificity
+threshold.riskc$sensitivity
+
+
+## 1.2 Intervention arm
+temp3 <- temp2 %>%
+  filter(group =="I") %>%
+  mutate(adj_p = CHARGE_AF_risk/5 * follow_time)
+
+#1.2.1 plot
+roc.i <- ggplot(temp3, aes(m = adj_p, d = outcome))+
+  geom_roc(n.cuts=0,labels=FALSE) +
+  scale_x_continuous(name = "1 - Specificity") +
+  scale_y_continuous(name = "Sensitivity") +
+  geom_abline(intercept = 0, slope = 1) + 
+  theme_minimal()
+
+#1.2.2 threshold analysis @ 75th percentile
+roc.riski.threhold <- (roc(temp3$outcome, temp3$adj_p))
+
+threshold.riski<- ci.thresholds(roc.riski.threhold, 
+              thresholds = quantile(temp3$adj_p, 0.75), 
+              boot.n = 10000, conf.level = 0.95, stratified = FALSE)
+
+threshold.riski$specificity
+threshold.riski$sensitivity
+
+# 1.3 combined plot
+
+roc.i <- roc.i + labs(title=paste0("B. Risk score in screening arm (AUC=", format(round(calc_auc(roc.i)$AUC, 2), nsmall=2),")"))
+
+roc.all <- gridExtra::grid.arrange(roc.c, roc.i, nrow = 1)
+ggsave(paste0("Tables and Figures/ROC for risk model ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), plot = roc.all, width = 11.5, height = 5)   
+ 
+### Part 2 Calibration plot
+## 2.1 control arm
+
+data.cal <- 
+  temp2 %>% 
+  filter(group =="C") %>% 
+  mutate(pAF_under_c_x_time = CHARGE_AF_risk * follow_time) %>% 
+  group_by(decile_charge) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time), 
+            predicted = sum(pAF_under_c_x_time/5)) %>% 
+  mutate( rate = count/time, 
+          se = sqrt(count / time^2),
+          ul = rate + 1.96*se,
+          ll = rate - 1.96*se,
+          predicted_rate = predicted/time)
+
+data.cal %>% 
+  mutate(rate100 = rate * 100, 
+         ul_100 = ul * 100, 
+         ll_100 = ll * 100, 
+         predicted_rate_100 = predicted_rate * 100) %>% 
+  
+  ggplot(aes(x=predicted_rate_100, y=rate100, ymin=ll_100, ymax=ul_100)) + 
+  scale_y_continuous(limits=c(0,10), breaks=seq(0,10,by=1)) + 
+  scale_x_continuous(limits=c(0,10), breaks=seq(0,10,by=1)) + 
+  geom_abline()+
+  geom_smooth(method="loess", span = 1, se=FALSE,  color="red", formula=y~-1+x)+
+  geom_pointrange(size=0.8, color="black", shape=18) +
+  xlab("Predicted AF diagnosis rate per 100 person years") + 
+  ylab("Observed AF diagnosis rate per 100 person years") + 
+  theme_minimal() +
+  labs(title="A. CHARGE-AF model in usual care arm") -> plot.cal.carm
+
+
+#2.2 Intervention arm
+
+data.cal <- 
+  temp2 %>% 
+  filter(group =="I") %>% 
+  mutate(pAF_under_i_x_time = CHARGE_AF_risk * follow_time) %>% 
+  group_by(decile_charge) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time), 
+            predicted = sum(pAF_under_i_x_time/5)) %>% 
+  mutate( rate = count/time, 
+          se = sqrt(count / time^2),
+          ul = rate + 1.96*se,
+          ll = rate - 1.96*se,
+          predicted_rate = predicted/time)
+
+data.cal %>% 
+  mutate(rate100 = rate * 100, 
+         ul_100 = ul * 100, 
+         ll_100 = ll * 100, 
+         predicted_rate_100 = predicted_rate * 100) %>% 
+  
+  ggplot(aes(x=predicted_rate_100, y=rate100, ymin=ll_100, ymax=ul_100)) + 
+  scale_y_continuous(limits=c(0,10), breaks=seq(0,10,by=1)) + 
+  scale_x_continuous(limits=c(0,10), breaks=seq(0,10,by=1)) + 
+  geom_abline()+
+  geom_smooth(method="loess", span =1, se=FALSE,  color="red", formula=y~-1+x)+
+  geom_pointrange(size=0.8, color="black", shape=18) +
+  xlab("Predicted AF diagnosis rate per 100 person years") + 
+  ylab("Observed AF diagnosis rate per 100 person years") + 
+  theme_minimal() +
+  labs(title="B. CHARGE-AF model in screening arm") -> plot.cal.iarm
+
+cal.all <- gridExtra::grid.arrange(plot.cal.carm, plot.cal.iarm, nrow = 1)
+ggsave(paste0("Tables and Figures/RR_calibration of risk models ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), plot =cal.all, width = 11, height = 5)   
+
+
+```
+
+**Supplemental table threshold perforance**
+```{r supplemental table 1 threshold performance, echo = FALSE}
+
+threshold.i$sensitivity
+threshold.i$specificity
+threshold.c$sensitivity
+threshold.c$specificity
+
+threshold.riski$sensitivity
+threshold.riski$specificity
+threshold.riskc$sensitivity
+threshold.riskc$specificity
+
+as.numeric(rownames(threshold.riskc$specificity))
+
+fmt_thres <- function(x) {
+  num_x <- as.numeric(x)
+  value <- round(num_x, 5) * 100
+  formatted_value <- sprintf("%.2f", value)
+  result <- paste0(">", formatted_value, " per 100 py")
+  return(result)
+}
+
+threshold.table <- 
+  data.frame(
+  model_approach = 
+    c(
+    "Components models used to calculate the of effect score (i.e., conditional average treatment effect)",
+    "Components models used to calculate the of effect score (i.e., conditional average treatment effect)", 
+    "CHARGE-AF risk model", 
+    "CHARGE-AF risk model"
+    ),
+  arm = 
+    c(
+    "Model to predict AF under usual care conditions (evaluated in those randomized to usual care)",
+    "Model to predict AF under usual screening conditions (evaluated in those randomized to screening)",
+    "Model to predict AF (evaluated in those randomized to usual care)",
+    "Model to predict AF (evaluated in those randomized to screening)"
+    ),
+  p75 = 
+    c(
+    fmt_thres(rownames(threshold.c$sensitivity)),
+    fmt_thres(rownames(threshold.i$sensitivity)),
+    fmt_thres(rownames(threshold.riskc$sensitivity)),
+    fmt_thres(rownames(threshold.riski$sensitivity))
+    ),
+  sp = 
+    c(
+    round(threshold.c$specificity[,2],2),
+    round(threshold.i$specificity[,2],2),
+    round(threshold.riskc$specificity[,2],2),
+    round(threshold.riski$specificity[,2],2)
+    ),
+  sn = 
+    c(
+    round(threshold.c$sensitivity[,2],2),
+    round(threshold.i$sensitivity[,2],2),
+    round(threshold.riskc$sensitivity[,2],2),
+    round(threshold.riski$sensitivity[,2],2)
+    )
+  )
+  
+threshold.table %>%  gt() %>% 
+   gt::gtsave(paste0("Tables and Figures/Supp Table 1 ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".docx"))
+```
+
+
+**Table 2**
+
+```{r Table 2, echo = FALSE}
+
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(gtsummary)
+library(gridExtra)
+
+temp2 <- mutate(temp2, quart= ntile(cate, 4), 
+                risk_charge = ntile(CHARGE_AF, 4))
+
+temp2 <- mutate(temp2, 
+                group2 = ifelse(
+                  quart==4 & risk_charge ==4, 
+                  "High risk & High efficacy",
+                  ifelse(
+                    quart == 4,
+                    "High efficacy & Low risk",
+                    ifelse(
+                      risk_charge == 4,
+                      "High risk & Low efficacy",
+                      NA
+                    )
+                  )
+                )
+                )
+
+temp2 %>% 
+  mutate(
+    eff = ifelse(
+      quart == 4, 
+      "High efficacy",
+      "Low efficacy"
+    ), 
+    risk = ifelse(
+      risk_charge == 4,
+      "High risk",
+      "Low risk"
+    )
+  ) %>% 
+  count(eff, risk) %>% 
+  pivot_wider(names_from = eff, values_from = n, values_fill = list(n = 0)) 
+##this is supp table 2##
+
+
+VITAL <- filter(temp2, !is.na(group2))
+
+#VITAL$group <- factor(VITAL$group, levels = c("I", "C"), labels = c("Screening", "Control"))
+VITAL$race <- factor(VITAL$racecat, levels = c(1, 2, 3, 4, 9), labels = c("White", "Black", "Hispanic", "Other", "Other"))
+VITAL$women <- ifelse(VITAL$Gender =="Female", 1, 0)
+
+n_both <- nrow(filter(VITAL, group2 =="High risk & High efficacy"))
+n_eff <- nrow(filter(VITAL, group2 =="High efficacy & Low risk"))
+n_risk <- nrow(filter(VITAL, group2 =="High risk & Low efficacy"))
+
+trial2 =
+  VITAL %>%
+  select(group2, age, women, race, SBP, DBP, HR, weight_kg, height_cm, 
+         lang_english, CurrentSmoker, HTN, CAD, DBM, CHF, PriorSTR, 
+         VAS, Anemia, Bleed, Renal, meds_HTN, meds_oac, meds_RateControl, 
+         meds_Antiarrhythmic, ecg12L_prior1y, pcpvsts_prior1y, CHARGE_AF)
+
+t2   <- tbl_summary(
+  trial2, 
+  by = "group2", 
+  statistic = list(all_continuous() ~ "{mean} ({sd})",
+                 all_categorical() ~ "{n} ({p}%)"), 
+  label = list(age ~ "Age, mean (SD), yrs", 
+              women ~ "Female sex, n (%)", 
+              race ~ "Race, n (%)",
+              SBP ~ "Systolic blood pressure, mean (SD), mmHg", 
+              DBP ~ "Diastolic blood pressure, mean (SD), mmHg", 
+              HR ~ "Heart rate, mean (SD), bpm",
+              height_cm ~ "Height, mean (SD), cm", 
+              weight_kg ~ "Weight, mean (SD), kg", 
+              lang_english ~ "English language preference, n (%)",
+              CurrentSmoker ~"Current smoking, n (%)", 
+              HTN ~ "Hypertension, n (%)",
+              CAD ~ "Coronary artery disease, n (%)",
+              DBM ~ "Diabetes, n (%)",
+              CHF ~ "Congestive heart failure, n (%)",
+              PriorSTR ~ "Prior stroke, n (%)",
+              VAS ~ "Vascular disease, n (%)",
+              Anemia ~ "Anemia, n (%)",
+              Bleed ~ "Bleeding history, n (%)",
+              Renal ~ "Chronic kidney disease, n (%)",
+              meds_HTN ~ "Antihypertensive medication, n (%)",
+              meds_oac ~ "Oral anticoagulant use, n (%)",
+              meds_RateControl ~"Rate control medication use, n (%)",
+              meds_Antiarrhythmic ~ "Antiarrhythmic medication use, n (%)",
+              ecg12L_prior1y ~ "12 lead ECG in prior year, n (%)",
+          #    ICD_prior3y ~ "Indwelling cardiac rhythm device prior 3 yrs, n (%)",
+              pcpvsts_prior1y ~ "PCP visits in the prior year, mean (SD)", 
+              CHARGE_AF ~ "CHARGE-AF score, mean (SD)"
+              )) 
+
+ t2 %>%   modify_footnote(c(all_stat_cols()) ~ NA) %>% 
+   as_gt() %>% 
+   gt::gtsave(paste0("Tables and Figures/RR_Table 3 ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".docx"))
+
+
+```
+
+
+
+```{r cate calibration figure supp 7}
+data.cate_graph <- 
+  temp2 %>% 
+  group_by(quart, group) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time)) %>% 
+  mutate(rate = count/time * 100 )
+
+data.cate_graph %>% 
+  select(quart, group, count, time, rate) %>% 
+  pivot_wider(names_from = c("group"),
+              values_from = c('time','count','rate')) %>% 
+  mutate(var = count_C/time_C^2 + count_I/time_I^2,
+         ir1 = count_C/time_C,  
+         ir2 = count_I/time_I, 
+         UL =  ((ir2-ir1) + 1.96*sqrt(var))*100,
+         LL =  ((ir2-ir1) - 1.96*sqrt(var))*100,
+         diff = (ir2 - ir1)*100) -> data.forest
+
+data.cal.c <- 
+  temp2 %>% 
+  filter(group == "C") %>% 
+  group_by(quart) %>% 
+  summarise(p_c = mean(pAF_under_c))
+
+data.cal.i <- 
+  temp2 %>% 
+  filter(group == "I") %>% 
+  group_by(quart) %>% 
+  summarise(p_i = mean(pAF_under_i))
+  
+data.forest$p_c <- data.cal.c$p_c
+data.forest$p_i <- data.cal.i$p_i
+
+
+data.forest %>% 
+  mutate(p_diff = ((p_i*time_I)/time_I - (p_c*time_C)/time_C)*100) %>% 
+  ggplot(aes(x=p_diff, y=diff, ymin=LL, ymax=UL)) + 
+  scale_x_continuous(name = "Predicted effect of screening (AF dx rate in intervention - AF dx rate in control)", 
+                     limits = c(-2,2.2), 
+                     breaks = c(seq(from = -2, to =2, by = 0.5))) +
+  scale_y_continuous(name = "Observed effect of screening (AF dx rate in intervention - AF dx rate in control)", 
+                     limits = c(-2,2.2), 
+                     breaks = c(seq(from = -2, to =2, by = 0.5))) +
+  geom_abline()+
+  geom_pointrange(size=0.8, color="black", shape=18) +
+  theme_minimal()
+
+
+ggsave(paste0("Tables and Figures/RR calibration quartiles ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".png"), width = 6, height = 6)   
+
+```
+
+
+
+```{r dose effect model supp 8}
+
+library("tidyverse")
+library("patchwork")
+
+#figure aesthetics 
+sachin_theme_leg <- theme_bw()+
+  theme(
+    panel.background = element_blank(), 
+    axis.line = element_line(colour = "grey75"),
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_line(color = "grey", linetype = "dotted" ),
+    panel.grid.minor.y = element_blank(),
+    legend.position = "top", 
+    legend.title = element_blank(),
+    axis.title=element_text(size=10))
+
+##DATA ##
+#charge is a 5 year risk; assuming steady risk
+temp2 <- temp2 %>% 
+  mutate(decile = ntile(cate, 10),
+         risk_charge = ntile(CHARGE_AF, 10), 
+         risk = CHARGE_AF / 500)
+
+
+temp2$group <- factor(temp2$group, levels = c("I", "C"), labels = c("Screening", "Usual care"))
+temp2 <-  
+  mutate(temp2, ptile_cate = (ntile(cate, 1000))/10, 
+         ptile_risk = (ntile(CHARGE_AF, 1000))/10)
+
+
+###################
+#
+# EFEFCT score
+#
+###############################################
+
+##PANEL B##
+
+#dataset
+ptile_cate <- seq(1, 100, by = 1)
+ptiles <- data.frame(x = ptile_cate[1:100])
+
+#intervention model, smoothed
+temp3.i <- temp2 %>% filter(group=="Screening")  
+l_i <- loess(outcome ~ ptile_cate, data = temp3.i, weight = follow_time, span = 0.75)
+predicted.i <- predict(l_i, newdata = ptiles, se = TRUE)
+
+#Usual care model, smoothed
+temp3.c <- temp2 %>% filter(group=="Usual care")  
+l_c <- loess(outcome ~ ptile_cate, data = temp3.c, weight = follow_time, span = 0.75)
+predicted.c <- predict(l_c, newdata = ptiles, se = TRUE)
+
+#difference
+diff = predicted.i$fit - predicted.c$fit
+se = sqrt(predicted.i$se.fit^2 + predicted.c$se.fit^2)
+ll = diff - 1.96 * se
+ul = diff + 1.96 * se
+diff.plot = data.frame(ptile = ptile_cate, diff = diff, ll = ll, ul = ul)
+
+
+#plot
+ggplot(data = diff.plot, mapping = aes(x=ptile, y = diff)) + 
+  geom_path(linewidth = 1) +
+  geom_ribbon(aes(x = ptile, ymin = ll, ymax = ul), fill = "grey", alpha = 0.5) + 
+  sachin_theme_leg + 
+  scale_y_continuous(labels = function(x) x * 100, name = "Difference in AF diagnosis rate per 100 person-years (intervention - usual care)", 
+                     limits = c(-.02, 0.042), 
+                     breaks = c(seq(from=-0.02, to = 0.04, by =0.01))) +
+  scale_x_continuous(name = "Percentile of predicted screening effectiveness \n(0 = lowest effect, 100 = highest effect)") -> panel.b
+  
+
+## new panel A
+data.panel_a = data.frame(ptile= ptile_cate, outcome = predicted.i$fit, se = predicted.i$se, group = "Screening")
+data.panel_b = data.frame(ptile= ptile_cate, outcome = predicted.c$fit, se = predicted.c$se, group = "Usual care")
+data.panel = bind_rows(data.panel_a, data.panel_b) %>% mutate(ul = outcome + 1.96*se, ll = outcome - 1.96*se)
+head(data.panel) 
+
+
+ggplot(data = data.panel, mapping = aes(x=ptile, y = outcome, ymin=ll, ymax =ul, color = group)) + 
+  sachin_theme_leg + 
+  geom_ribbon(fill="grey", alpha =0.7, linetype = 0)+
+  geom_path(linewidth = 1) + 
+  scale_x_continuous(name = "Percentile of predicted screening effectiveness \n(0 = lowest effect, 100 = highest effect)") +
+  scale_y_continuous( name = "Observed AF diagnosis rate per 100 person-years", 
+                      limits = c(-0.006,0.08), 
+                      breaks = c(seq(from = 0, to =0.08, by = 0.01)))-> panel.a
+
+
+fig.dose.effect.effectmodel <- panel.a + panel.b
+fig.dose.effect.effectmodel
+ggsave(paste0("Tables and Figures/Dose effect model ", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), width = 10, height = 6)   
+
+```
+
+
+
+```{r supplement internal risk model supp 9}
+
+library("patchwork")
+temp2 <- temp2 %>% mutate(risk_int = ntile(pAF_under_c, 4))
+cor(temp2$pAF_under_c, temp2$CHARGE_AF, method = "spearman") 
+
+#Prep risk data
+data.risk_graph <- temp2 %>% 
+  group_by(risk_int, group) %>% 
+  summarise(count = sum(outcome), 
+            time = sum(follow_time)) %>% 
+  mutate(rate = count/time * 100 )  
+
+data.risk_graph %>% 
+  select(risk_int, group, count, time, rate) %>% 
+  pivot_wider(names_from = c("group"),
+              values_from = c('time','count','rate')) %>% 
+  mutate(var = count_C/time_C^2 + count_I/time_I^2,
+         ir1 = count_C/time_C,  
+         ir2 = count_I/time_I, 
+         UL =  ((ir2-ir1) + 1.96*sqrt(var))*100,
+         LL =  ((ir2-ir1) - 1.96*sqrt(var))*100,
+         diff = (ir2 - ir1)*100) -> data.forest
+
+set.digits =2
+base_data <- tibble::tibble(mean  = data.forest$diff,
+                            lower = data.forest$LL,
+                            upper = data.forest$UL,
+                            quartile = c("1 (lowest)", "2", "3", "4 (highest)"),
+                            control = paste(
+                              format(
+                                round(
+                                  data.forest$ir1*100,
+                                  set.digits),
+                                nsmall=set.digits
+                              ),
+                              " ",  
+                              "(",
+                              data.forest$count_C,
+                              "/",
+                              round(data.forest$time_C,
+                                    0),
+                              ")", 
+                              sep = ""),
+                            intervention = paste(
+                              format(
+                                round(
+                                  data.forest$ir2*100,
+                                  set.digits
+                                ),
+                                nsmall=set.digits),
+                              " ",  "(",data.forest$count_I,"/",round(data.forest$time_I, 0),")", sep = ""),
+                            Observed_efficacy = paste0(format(round(data.forest$diff,set.digits),nsmall=set.digits), " (", format(round(data.forest$LL,set.digits), nsmall=set.digits), " to ", format(round(data.forest$UL,set.digits), nsmall=set.digits),")"))
+
+base_data$quartile <- factor(base_data$quartile, levels = c('4 (highest)', '3', '2', '1 (lowest)'))
+
+
+forest_data <- select(base_data, c(quartile, control, intervention, Observed_efficacy))
+forest_data$control <- as.character(forest_data$control)
+forest_data$intervention <- as.character(forest_data$intervention)
+estimate_lab = paste0(round(data.forest$diff, set.digits), " (", round(data.forest$LL, set.digits), "-", round(data.forest$UL, set.digits), ")")
+
+geom.text.size = 3
+
+p_left <- 
+  forest_data  |>
+  ggplot(aes(y = quartile)) + 
+  geom_text(aes(x = 0, label = quartile), hjust = 0, size=geom.text.size) +
+  geom_text(aes(x = 1.1, label = control), hjust = 0, size=geom.text.size) + 
+  geom_text(aes(x = 2.2, label = intervention),hjust = 0,  size=geom.text.size) +
+  geom_text(aes(x = 3.3, label = Observed_efficacy), hjust = 0,  size=geom.text.size) + 
+  annotate("text", x = 0,  y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Quartile of predicted risk")  +
+  annotate("text", x = 1.1, y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Usual care,\nobserved events per 100py\n(cases/py)")  +
+  annotate("text", x = 2.2, y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Screening\nobserved events per 100py\n(cases/py)")   +
+  annotate("text", x = 3.3, y=(11-6), hjust = 0,  size=geom.text.size, fontface = "bold", label = "Observed rate\ndifference (95% CI)")  +
+  theme_void() +
+  coord_cartesian(xlim = c(0, 4), ylim = c(0.5, (11-6)))
+
+
+p_mid <- 
+  base_data |>
+  ggplot(aes(y = quartile)) + 
+  theme_classic()+ 
+  geom_point(aes(x=mean), shape=15, size=3) +
+  geom_linerange(aes(xmin=lower, xmax=upper)) + 
+  geom_vline(xintercept = 0, linetype="dashed") +
+  scale_x_continuous(name = "Rate difference (95% CI)", 
+                     limits = c(-1.5,2.6), 
+                     breaks = c(seq(from = -1.5, to =2.5, by = 0.5))) + 
+  annotate("text", x = -1, y = (11-6), label = "Favors usual care", size=geom.text.size, fontface = "bold",) + 
+  annotate("text", x = 1, y = (11-6), label = "Favors screening", size=geom.text.size, fontface = "bold",) + 
+  theme(axis.line.y = element_blank(),
+        axis.ticks.y= element_blank(),
+        axis.text.y= element_blank(),
+        axis.title.y= element_blank(), 
+        axis.title.x =element_text(size = 9))+
+  coord_cartesian(ylim = c(0.5, (11-6)))
+
+p_left + p_mid + plot_layout(width = c(2, 1))
+
+#ggsave(paste0("Tables and Figures/Forest plot risk internal", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".png"), width = 10, height = 5)
+ggsave(paste0("Tables and Figures/Forest plot risk internal", format(Sys.time(), "%Y-%m-%d_%H-%M"), ".pdf"), width = 11, height = 7)   
+m3 <-  glm(outcome ~ group * risk_int + offset(log(follow_time)), family = "poisson", data=temp2)
+summary(m3)
+pval_risk_internal <- car::Anova(m3, type = 3, test.statistic = "LR")[3,3]
+
+
+```
+

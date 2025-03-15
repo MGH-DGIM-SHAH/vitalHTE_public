@@ -1,0 +1,201 @@
+---
+title: "Survival supplement v3"
+author: "Dan Park and Sachin Shah"
+date: "2024-08-05"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+# v3 R&R
+knitr::opts_chunk$set(echo = FALSE)
+library(haven)
+library(sas7bdat)
+library(tidyverse)
+library(survival)
+library(ggsurvfit)
+library(gtsummary)
+library(gt)
+
+rm(list=ls())
+load("~/real lasso v13-1 2024-04-30 no ICD.RData")
+
+VITAL <- temp2
+
+# format date types
+VITAL <- VITAL %>%
+  mutate(
+    across(
+      .cols = c(
+        end_date, 
+        date_of_death, 
+        af_dx_date, 
+        fstvisit_date
+      ),
+      .fns = ~ as.Date(., format = "%Y-%m-%d")
+    )
+  )
+
+# include af_dx_date to conduct a survival analysis
+VITAL <- VITAL %>%
+  rowwise() %>%
+  mutate(
+    min_date = min(end_date, af_dx_date, date_of_death, na.rm = TRUE),
+    follow_time_days = as.numeric(min_date - fstvisit_date),
+    follow_time = as.numeric((min_date - fstvisit_date) / 365.25)
+  )  
+
+VITAL$group <- factor(VITAL$group, levels = c("I", "C"), labels = c("Screening", "Usual care"))
+
+```
+
+**Supplemental Methods 1**
+We used a survival model with time-to-atrial fibrillation as the outcome to test the robustness of the modified Poisson regression model used in the primary analysis. The analysis demonstrated no difference in time-to-atrial fibrillation diagnosis by randomization arm supporting the primary modeling approach. The Kaplan-Meier curve demonstrates no statistical or clinically meaningful difference in time-to-AF diagnosis.
+
+```{r cars, echo = FALSE}
+surv.fit <- survfit2(
+  formula = Surv(follow_time_days, outcome) ~ group, 
+  data = VITAL
+)
+
+# log-rank test
+test.logrank <- survdiff(
+  formula = Surv(follow_time_days, outcome) ~ group, 
+  data = VITAL,
+  rho = 0
+)
+
+#test.logrank$chisq
+pval <- test.logrank$pvalue
+
+
+plot.km <- surv.fit %>%
+  ggsurvfit() +
+  labs(
+    x = "Days",
+    y = "Percent free from AF diagnosis"
+  ) +
+  add_confidence_interval() + 
+  # scale_color_discrete(
+  #   labels = c("Screening arm", "Control arm")
+  # ) + 
+  # scale_fill_discrete(
+  #   labels = c("Screening arm", "Control arm")
+  # ) +
+  scale_x_continuous(
+    name = "Days following initial visit") +
+  scale_y_continuous(
+    name = "Proportion free from AF diagnosis", 
+    limits = c(0.95,1), 
+    breaks = c(seq(from = 0.95, to =1, by = .01))
+    ) +
+  annotate(
+    "text", 
+    x = 300, 
+    y=0.995, 
+    hjust = 0,  
+    size=4, 
+    label = paste(
+      "p value =", 
+      round(
+        pval, 2)
+      )) + 
+  add_risktable(
+    risktable_stats = "n.risk",
+    stats_label = list(n.risk = "Number at Risk"),
+  ) +
+  theme(legend.position="top")
+
+ggsave(
+  filename = "KM_AF_dx_risk.pdf",
+  plot = plot.km,
+  #device = "pdf",
+  path = "Tables\ and\ Figures", 
+  width = 6, 
+  height = 6
+)
+
+ggsave(
+  filename = "KM_AF_dx_risk.png",
+  plot = plot.km,
+  #device = "pdf",
+  path = "Tables\ and\ Figures", 
+  width = 6, 
+  height = 6
+)
+```
+
+Further, among those with a new diagnosis of AF during the study follow up, there was no statistical or clinically meaningful difference in the distribution of time to AF diagnosis. 
+```{r, echo= F}
+tbl <- VITAL %>% 
+  filter(outcome == 1) %>%
+  select(follow_time_days, group) %>%
+  tbl_summary(
+    by = group,
+    type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c(
+        "{mean} ({sd})",
+        "{median} ({p25}, {p75})"
+    ),
+    label = follow_time_days ~ "Days since first visit"
+  ) %>%
+  add_stat(
+    fns = everything() ~ function(data, variable, by, ...) {
+      p.value.t <- t.test(
+        formula = as.formula(paste(variable, by, sep = "~")),
+        data = data,
+        var.equal = TRUE
+      )$p.value
+      
+      p.value.wilcox <- wilcox.test(
+        formula = as.formula(paste(variable, by, sep = "~")),
+        data = data
+      )$p.value
+      
+      data.frame(p.value = c(p.value.t, p.value.wilcox))
+    },
+    location = everything() ~ "level"
+  ) %>%
+  bold_p()
+
+tbl_hnames <- show_header_names(tbl)
+
+tbl <- tbl %>%
+  modify_header(
+    stat_1 = sub(
+      "\\*\\*.+\\*\\*", 
+      "\\*\\*Control arm\\*\\*", 
+      tbl_hnames$label[which(tbl_hnames$column == "stat_1")]),
+    stat_2 = sub(
+      "\\*\\*.+\\*\\*", 
+      "\\*\\*Screening arm\\*\\*", 
+      tbl_hnames$label[which(tbl_hnames$column == "stat_2")]),
+    p.value = "**p-value**"
+  ) %>%
+  modify_fmt_fun(
+    update = p.value ~ function(x) style_pvalue(x, digits = 3),
+     )
+  
+
+tbl.gt <- as_gt(tbl) %>%
+  tab_footnote(
+    footnote = "pooled t-test",
+    locations = cells_body(
+      columns = p.value,
+      rows = 2
+    )
+  ) %>%
+  tab_footnote(
+    footnote = "Wilcoxon rank sum test",
+    locations = cells_body(
+      columns = p.value,
+      row = 3
+    )
+  )
+
+tbl
+
+
+```
+

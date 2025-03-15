@@ -1,0 +1,306 @@
+---
+title: "VITAL-AF Analysis"
+author: "Jay Iyer & Sachin Shah"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r libs and data, eval = T, echo = T}
+library(haven)
+library(sas7bdat)
+library(tidyverse)
+library(glmnet)
+
+rm(list=ls())
+# Read in dataframe 
+VITAL_full <- read_sas('analytic_20240312.sas7bdat') %>% 
+                mutate(fow2 = NA) %>% 
+                mutate(fow2 = ifelse((is.na(SBP) | is.na(DBP)), "Missing blood pressure", 
+                                     ifelse(is.na(CurrentSmoker), "Missing smoking status", 
+                                            ifelse((is.na(height_cm)|is.na(weight_kg)), "Missing height/weight", NA))), 
+                        exc1 = ifelse((PrevalentAF == 1), "Prevalent AF", NA ))
+VITAL_consort <- VITAL_full 
+VITAL <- filter(VITAL_full, is.na(exc1) & is.na(fow2))
+
+#fixing miscoded weight for 1 participant
+VITAL <- VITAL %>% mutate(weight_kg = if_else(mrn == "XXXXXXXX", "9999", weight_kg)) ## redacted for publication
+
+VITAL$end_date <- as.Date(VITAL$end_date)
+VITAL$date_of_death <- as.Date(VITAL$date_of_death)
+VITAL$af_dx_date <- as.Date(VITAL$af_dx_date)
+VITAL$fstvisit_date <- as.Date(VITAL$fstvisit_date)
+
+VITAL <- VITAL %>%
+  rowwise() %>%
+  mutate(min_date = min(end_date, date_of_death, na.rm = TRUE))
+
+VITAL$follow_time <- (VITAL$min_date - VITAL$fstvisit_date)
+VITAL$follow_time <- VITAL$follow_time / 365.25
+VITAL$follow_time <- as.numeric(VITAL$follow_time)
+VITAL$log_follow_time <- log(VITAL$follow_time)
+
+## remove people with ICDS
+VITAL <- filter(VITAL, ICD_prior3y==0)
+
+# Split into treatment and control arms
+VITAL_C <- filter(VITAL, group == 'C')
+VITAL_I <- filter(VITAL, group == 'I')
+```
+
+
+```{r icc}
+## determine the ICC  for practice level clustering
+summary_aov = summary(aov(outcome ~ practice, data = VITAL))
+summary_aov[[1]][1,2]/sum(summary_aov[[1]][,2])
+text.icc <- as.numeric(summary_aov[[1]][1,2]/sum(summary_aov[[1]][,2]))
+
+```
+
+
+```{r Log-Poisson Models Control - p(Y|C), eval = F, echo = T}
+
+## ---------------------------------------------------------------------------------------------
+## Step 1: create a model in the control arm to predict the counterfactual AF dx rate for those randomized to screening 
+## ---------------------------------------------------------------------------------------------
+
+# Define variable names
+outcome_var <- "outcome"
+predictors_c <- c("age", "SBP", "DBP", "HR", "weight_kg", "height_cm", 'lang_english', 'Gender', 'CurrentSmoker', 'HTN', 'CAD', 'DBM','CHF', 'PriorSTR', 'VAS', 'Anemia', 'Bleed', 'Renal', 'meds_HTN', 'meds_oac', 'meds_RateControl', 'meds_Antiarrhythmic', 'ecg12L_prior1y', 'pcpvsts_prior1y')
+
+x_c <- model.matrix(as.formula(paste("~", paste(predictors_c, collapse = "+"))), data = VITAL_C)
+y_c <- VITAL_C$outcome
+y_c <- as.numeric(y_c)
+offset <- VITAL_C$log_follow_time
+
+# Create the cross-validation folds
+set.seed(51)
+nfolds <- 10
+cv_folds <- cv.glmnet(x_c, y_c, family = "poisson", type.measure = "mse", alpha = 1, nfolds = nfolds, offset = offset)
+
+glmnet.full <- cv_folds$glmnet.fit 
+plot(cv_folds)
+
+# Get the best lambda value based on minimizing RSS
+best_lambda <- cv_folds$lambda.min
+lambda.index_full = which(glmnet.full$lambda==best_lambda)
+optimal.beta_full  <- glmnet.full$beta[,lambda.index_full]
+nonzero.coef_full <- abs(optimal.beta_full)>0 
+selectedBeta_full <- optimal.beta_full[nonzero.coef_full] 
+names(selectedBeta_full) 
+
+x_c <- model.matrix(as.formula(paste("~", paste(predictors_c, collapse = "+"))), data = VITAL_C)
+model_c <- glmnet(x_c, y_c, family = "poisson", alpha = 1, lambda = best_lambda, offset=offset)
+
+# Print the model coefficients
+summary(model_c)
+print(coef(model_c))
+odds_ratios <- exp(coef(model_c))
+print(odds_ratios)
+
+#Make predictions in Intervention arm
+test_data <- model.matrix(as.formula(paste("~", paste(predictors_c, collapse = "+"))), data = VITAL_I)
+pAFcontrol_I <- predict(model_c, newx = test_data, newoffset = log(1), type = "response")
+
+data.prediction <- data.frame(VITAL_I$mrn, VITAL_I$group, pAFcontrol_I) %>% 
+                    rename (pAF_under_c = s0,
+                            mrn = VITAL_I.mrn, 
+                            group = VITAL_I.group)
+
+
+## ---------------------------------------------------------------------------------------------
+## Step 2: use leave-one out to predict AF dx under usual care for those randomized to usual care
+## ---------------------------------------------------------------------------------------------
+
+# Convert predictors to a formula
+y <- length(VITAL_C$outcome)
+
+# Initialize an empty vector to store the predictions
+pAFcontrol_C <- numeric(length(y))
+
+# Perform leave-one-out 
+for (i in (1:y)){  
+  # Subset the data for training (exclude the ith observation)
+  x_train <- VITAL_C[-i, ]
+  
+   # Fit the model on the training set with the offset
+  x_c <- model.matrix(as.formula(paste("~", paste(predictors_c, collapse = "+"))), data = x_train)
+  y_c <- x_train$outcome
+  y_c <- as.numeric(y_c)
+  offset <- x_train$log_follow_time
+
+  model_c_c <- glmnet(x_c, y_c, family = "poisson", alpha = 1, lambda = best_lambda, offset=offset)
+
+
+  x_p <- model.matrix(as.formula(paste("~", paste(predictors_c, collapse = "+"))), data = VITAL_C)
+  x_p <- x_p[i, ]
+  pAFcontrol_C[i] <- predict(model_c_c, newx = x_p, newoffset = log(1), type = "response")
+  print(paste(i, "of", y))
+}
+
+temp <- data.frame(VITAL_C$mrn, VITAL_C$group, pAFcontrol_C) %>% 
+          rename (pAF_under_c = pAFcontrol_C,
+                  mrn = VITAL_C.mrn, 
+                  group = VITAL_C.group)
+
+## END Leave one out
+
+## create combined dataset
+data.p_undercontrol <- bind_rows(data.prediction, temp) 
+head(data.p_undercontrol)
+
+## remove temp datasets
+rm(temp)
+rm(data.prediction)
+
+
+```
+
+```{r log-Poisson for Intervention, eval = F, echo = T}
+
+## ---------------------------------------------------------------------------------------------
+## Step 1: create a model in the screening arm to predict the counterfactual AF dx rate for those randomized to usual care ##
+## ---------------------------------------------------------------------------------------------
+
+# Var names
+outcome_var <- "outcome"
+predictors_i <- c("age", "SBP", "DBP", "HR", "weight_kg", "height_cm",  'lang_english', 'Gender', 'CurrentSmoker', 'HTN', 'CAD', 'DBM','CHF', 'PriorSTR', 'VAS', 'Anemia', 'Bleed', 'Renal', 'meds_HTN', 'meds_oac', 'meds_RateControl', 'meds_Antiarrhythmic', 'ecg12L_prior1y', 'pcpvsts_prior1y')
+
+x_i <- model.matrix(as.formula(paste("~", paste(predictors_i, collapse = "+"))), data = VITAL_I)
+y_i <- VITAL_I$outcome
+y_i <- as.numeric(y_i)
+offset <- VITAL_I$log_follow_time
+
+# Create the cross-validation folds
+nfolds <- 10
+cv_folds <- cv.glmnet(x_i, y_i, family = "poisson", type.measure = "mse", nfolds = nfolds, offset = offset)
+
+glmnet.full <- cv_folds$glmnet.fit 
+plot(cv_folds)
+
+# Get the best lambda value based on minimizing mean squared error (MSE)
+best_lambda <- cv_folds$lambda.min
+lambda.index_full = which(glmnet.full$lambda==best_lambda)
+optimal.beta_full  <- glmnet.full$beta[,lambda.index_full]
+nonzero.coef_full <- abs(optimal.beta_full)>0 
+selectedBeta_full <- optimal.beta_full[nonzero.coef_full] 
+names(selectedBeta_full) 
+
+x_i <- model.matrix(as.formula(paste("~", paste(predictors_i, collapse = "+"))), data = VITAL_I)
+
+# Fit the Poisson model using LAR and the best lambda value
+model_i <- glmnet(x_i, y_i, family = "poisson", alpha = 1, lambda = best_lambda, offset=offset)
+
+# Print the model coefficients
+summary(model_i)
+print(coef(model_i))
+odds_ratios <- exp(coef(model_i))
+print(odds_ratios)
+
+# Make predictions in Control arm
+test_data <- model.matrix(as.formula(paste("~", paste(predictors_i, collapse = "+"))), data = VITAL_C)
+pAFintervention_C <- predict(model_i, newx = test_data, newoffset = log(1), type = "response")
+
+data.prediction <- data.frame(VITAL_C$mrn, VITAL_C$group, pAFintervention_C) %>% 
+                    rename (pAF_under_i = s0,
+                            mrn = VITAL_C.mrn, 
+                            group = VITAL_C.group)
+
+
+## ---------------------------------------------------------------------------------------------
+##Step 2: use leave-one out to predict AF dx under screening for those randomized to screening
+## ---------------------------------------------------------------------------------------------
+
+# Convert predictors to a formula
+y <- length(VITAL_I$outcome)
+# Initialize an empty vector to store the predictions
+pAFintervention_I <- numeric(length(y))
+
+# Perform leave-one-out 
+for (i in (1:y)){  
+  # Subset the data for training (exclude the ith observation)
+  x_train <- VITAL_I[-i, ]
+  
+   # Fit the model on the training set with the offset
+  x_i <- model.matrix(as.formula(paste("~", paste(predictors_i, collapse = "+"))), data = x_train)
+  y_i <- x_train$outcome
+  y_i <- as.numeric(y_i)
+  offset <- x_train$log_follow_time
+
+  model_i_i <- glmnet(x_i, y_i, family = "poisson", alpha = 1, lambda = best_lambda, offset=offset)
+
+
+  x_p <- model.matrix(as.formula(paste("~", paste(predictors_i, collapse = "+"))), data = VITAL_I)
+  x_p <- x_p[i, ]
+  pAFintervention_I[i] <- predict(model_i_i, newx = x_p, newoffset = log(1), type = "response")  
+  print(paste(i, "of", y))
+}
+
+temp <- data.frame(VITAL_I$mrn, VITAL_I$group, pAFintervention_I) %>% 
+          rename (pAF_under_i = pAFintervention_I,
+                  mrn = VITAL_I.mrn, 
+                  group = VITAL_I.group)
+
+## END Leave one out
+data.p_underintervention <- bind_rows(temp, data.prediction)
+head(data.p_underintervention)
+
+rm(temp)
+rm(data.prediction)
+
+```
+
+```{r create final data}
+
+head(VITAL)
+head(data.p_undercontrol)
+head(data.p_underintervention)
+temp <- left_join(VITAL, data.p_undercontrol, by = "mrn") %>% 
+        left_join(data.p_underintervention, by ="mrn") 
+
+#odd error where I think left join created a row-wise dataset
+#declaring it as a data frame fixed this
+temp2 <- as.data.frame(temp)
+rm(temp)
+
+#notation: cate is from the leave one out method, 
+temp2 <- temp2 %>% 
+          mutate(cate = pAF_under_i - pAF_under_c, 
+                decile = ntile(cate, 4), 
+                risk_charge = ntile(CHARGE_AF, 4))
+temp2$female = (temp2$Gender=="Female") *1
+
+##clean up repo
+rm (cv_folds, data.p_undercontrol, data.p_underintervention, pAFcontrol_I, pAFintervention_C, test_data, VITAL_C, VITAL_I, x_c, x_i, x_train, best_lambda, i, lambda.index_full, nfolds, nonzero.coef_full, offset, optimal.beta_full, outcome_var, pAFcontrol_C, pAFintervention_I, predictors_c, predictors_i, selectedBeta_full, x_p, y, y_c, y_i,  glmnet.full, VITAL_full, model_i_i, model_c_c, odds_ratios)
+
+save.image("~/Dropbox (Partners HealthCare)/VITAL_HTE/R Environments Repo/real lasso v13-1 2024-04-30 no ICD.RData")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
